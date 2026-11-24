@@ -131,6 +131,130 @@ For example, `{"action":"key","key":"Enter"}` presses and releases Enter;
 `state`, `release`, `mouse` and `mouse_relative`; run `--help` for details.
 Remote IDs have the form `remote-video0`.
 
+### Agent automation examples
+
+The following examples use a generic local DaveKVM installation. Replace the
+device ID with the ID returned by `list`. An automation agent should inspect
+the screenshot and verify the selected target before sending input. Keyboard
+and mouse events affect the focused window on the connected computer.
+
+Capture a JPEG frame or an MJPEG stream:
+
+```sh
+python3 davekvm-grabber list
+python3 davekvm-grabber snapshot video0 > frame.jpg
+python3 davekvm-grabber stream video0 > capture.mjpeg
+```
+
+The stream runs until stopped. To capture a frame over an existing SSH login,
+replace `kvm-host` and the installation directory with your own SSH alias and
+path. The SSH connection encrypts the transport:
+
+```sh
+ssh -T kvm-host 'cd ~/DaveKVM && python3 davekvm-grabber snapshot video0' > frame.jpg
+```
+
+Start a control session and wait for its `ready` event:
+
+```sh
+python3 davekvm-control --device video0
+```
+
+Send one JSON object per line and read its response before the next command.
+Each `key` action presses and releases a key. `type` uses US-layout ASCII and
+does not press Enter. For example:
+
+```json
+{"action":"type","text":"Hello from DaveKVM"}
+{"action":"key","key":"Enter"}
+{"action":"key","key":"KeyC","modifiers":["ControlLeft"]}
+{"action":"key","key":"F2"}
+```
+
+Move the pointer to the center, click, and release the left button:
+
+```json
+{"action":"mouse","x":2048,"y":2048,"buttons":0,"wheel":0}
+{"action":"mouse","x":2048,"y":2048,"buttons":1,"wheel":0}
+{"action":"mouse","x":2048,"y":2048,"buttons":0,"wheel":0}
+```
+
+Absolute coordinates range from 0 to 4095. The button mask uses left `1`,
+right `2` and middle `4`; send `buttons: 0` after a click. Relative movement
+uses `x` and `y` from -127 to 127:
+
+```json
+{"action":"mouse_relative","x":20,"y":-10,"buttons":0,"wheel":0}
+{"action":"release"}
+```
+
+For an agent running on the DaveKVM host, this Python example captures a frame
+without overwriting an existing file, then opens one control session. The
+example intentionally sends input to the target; run it only after inspecting
+the image and confirming the focused window is appropriate:
+
+```python
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+project = Path.cwd()  # Run this example from the DaveKVM directory.
+device = "video0"
+
+with Path("frame.jpg").open("xb") as image:
+    subprocess.run(
+        [sys.executable, str(project / "davekvm-grabber"), "snapshot", device],
+        stdout=image,
+        check=True,
+        timeout=30,
+    )
+
+# Replace this prompt with the agent's own image inspection and decision.
+if input("Inspect frame.jpg. Send example input to this target? [yes/no] ").strip().lower() != "yes":
+    raise SystemExit("Control cancelled")
+
+control = subprocess.Popen(
+    [sys.executable, str(project / "davekvm-control"), "--device", device],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    text=True,
+    bufsize=1,
+)
+
+def receive():
+    line = control.stdout.readline()
+    if not line:
+        raise RuntimeError("Control session ended unexpectedly")
+    return json.loads(line)
+
+def send(command):
+    control.stdin.write(json.dumps(command) + "\n")
+    control.stdin.flush()
+    response = receive()
+    if response.get("ok") is not True:
+        raise RuntimeError(f"Command failed: {response}")
+    return response
+
+try:
+    ready = receive()
+    if ready.get("event") != "ready" or ready.get("device") != device:
+        raise RuntimeError(f"Unexpected control session: {ready}")
+    send({"action": "type", "text": "hello"})
+    send({"action": "mouse_relative", "x": 20, "y": 0, "buttons": 0, "wheel": 0})
+finally:
+    control.stdin.close()  # Closing the session releases the lease.
+    try:
+        control.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        control.kill()
+        control.wait()
+    control.stdout.close()
+```
+
+This minimal example waits synchronously for responses. A long-running agent
+should also enforce its own response deadlines and handle process failures.
+
 To use the optional bridge, configure a dedicated SSH account and key on the
 remote host with a forced command invoking `davekvm-bridge`. Disable forwarding,
 PTY and shell access for that key. The forced-command wrapper must provide
