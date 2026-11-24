@@ -4,6 +4,7 @@
 """JSON Lines keyboard control for an authenticated SSH session on DaveKVM."""
 import base64, json, os, re, signal, sys, threading, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
+from messages import UserError, message
 
 BASE_URL = os.environ.get('DAVEKVM_BASE_URL', 'http://127.0.0.1:8080').rstrip('/')
 BASE = BASE_URL + '/grabber/api/keyboard/'
@@ -20,7 +21,10 @@ SHIFTED = {'!':'Digit1','@':'Digit2','#':'Digit3','$':'Digit4','%':'Digit5','^':
 class Client:
     def __init__(self, device):
         self.device = device
-        password = Path(os.environ.get('DAVEKVM_PASSWORD_FILE', str(Path.home() / '.config/davekvm/password'))).read_text().strip()
+        try:
+            password = Path(os.environ.get('DAVEKVM_PASSWORD_FILE', str(Path.home() / '.config/davekvm/password'))).read_text(encoding='utf-8').strip()
+        except (OSError, UnicodeError) as exc:
+            raise UserError('PASSWORD_FILE_ERROR') from exc
         self.auth = 'Basic ' + base64.b64encode((os.environ.get('DAVEKVM_USERNAME', 'davekvm')+':'+password).encode()).decode()
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.lock = threading.Lock()
@@ -36,11 +40,11 @@ class Client:
             with self.opener.open(req, timeout=5) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            try: message = json.load(exc).get('error')
-            except (ValueError, UnicodeError): message = None
-            raise RuntimeError(message or 'Błąd HTTP '+str(exc.code)) from exc
+            try: code = json.load(exc).get('error_code')
+            except (ValueError, UnicodeError, AttributeError): code = None
+            raise UserError(code or 'HTTP_ERROR') from exc
         except (OSError, urllib.error.URLError) as exc:
-            raise RuntimeError('Nie można połączyć się z panelem DaveKVM') from exc
+            raise UserError('PANEL_CONNECT_FAILED') from exc
 
     def acquire(self):
         self.token = self.call('acquire', {'device':self.device})['token']
@@ -48,13 +52,13 @@ class Client:
 
     def state(self, modifiers, keys):
         with self.lock:
-            if self.failure: raise RuntimeError(self.failure)
+            if self.failure: raise UserError(self.failure)
             self.call('state', {'token':self.token, 'modifiers':modifiers, 'keys':keys})
             self.modifiers, self.keys = modifiers, list(keys)
 
     def mouse(self, x, y, buttons, wheel, relative=False):
         with self.lock:
-            if self.failure: raise RuntimeError(self.failure)
+            if self.failure: raise UserError(self.failure)
             self.call('mouse-relative' if relative else 'mouse', {'token': self.token, 'x': x, 'y': y, 'buttons': buttons, 'wheel': wheel})
 
     def heartbeat(self):
@@ -62,7 +66,7 @@ class Client:
             with self.lock:
                 try: self.call('state', {'token':self.token, 'modifiers':self.modifiers, 'keys':self.keys})
                 except Exception as exc:
-                    self.failure = str(exc)
+                    self.failure = exc.code if isinstance(exc, UserError) else 'PANEL_CONNECT_FAILED'
                     return
 
     def close(self):
@@ -75,16 +79,16 @@ class Client:
 
 def parse_mods(value):
     if not isinstance(value, list) or any(not isinstance(x,str) or x not in MODS for x in value):
-        raise ValueError('Nieznane modyfikatory; użyj np. ControlLeft, ShiftLeft, AltLeft')
+        raise UserError('UNKNOWN_MODIFIERS')
     bits=0
     for m in value: bits |= MODS[m]
     return bits
 
 def parse_keys(value):
     if not isinstance(value, list) or len(value)>6 or any(not isinstance(x,str) or x not in KEYS for x in value):
-        raise ValueError('Nieznane klawisze lub więcej niż 6 klawiszy')
+        raise UserError('INVALID_KEYS')
     result=[KEYS[k] for k in value]
-    if len(set(result)) != len(result): raise ValueError('Powtórzony klawisz')
+    if len(set(result)) != len(result): raise UserError('DUPLICATE_KEY')
     return result
 
 def char_key(c):
@@ -93,14 +97,14 @@ def char_key(c):
     if '0' <= c <= '9': return 'Digit'+c, 0
     if c in SYMBOLS: return SYMBOLS[c], 0
     if c in SHIFTED: return SHIFTED[c], 2
-    raise ValueError('Tekst obsługuje znaki ASCII; układ klawiatury zależy od komputerem docelowym')
+    raise UserError('UNSUPPORTED_TEXT')
 
 def execute(client, data):
-    if not isinstance(data,dict): raise ValueError('Oczekiwano obiektu JSON')
+    if not isinstance(data,dict): raise UserError('EXPECTED_OBJECT')
     action=data.get('action')
     if action=='type':
         text=data.get('text')
-        if not isinstance(text,str) or len(text)>1000: raise ValueError('Tekst musi mieć najwyżej 1000 znaków')
+        if not isinstance(text,str) or len(text)>1000: raise UserError('INVALID_TEXT')
         # Validate before sending anything, so invalid text cannot be partially typed.
         reports=[char_key(c) for c in text]
         for name,mod in reports:
@@ -120,13 +124,13 @@ def execute(client, data):
         x,y,buttons,wheel = (data.get(k, default) for k,default in (('x',None),('y',None),('buttons',0),('wheel',0)))
         relative = action == 'mouse_relative'
         if any(type(v) is not int for v in (x,y,buttons,wheel)) or not (0<=buttons<=7 and -127<=wheel<=127) or (relative and not (-127<=x<=127 and -127<=y<=127)) or (not relative and not (0<=x<=4095 and 0<=y<=4095)):
-            raise ValueError('Mysz: x/y 0–4095 albo -127–127 dla ruchu względnego; buttons 0–7; wheel -127–127')
+            raise UserError('INVALID_MOUSE')
         client.mouse(x,y,buttons,wheel,relative=relative)
         return {'ok':True}
     if action=='release':
         client.state(0,[])
         return {'ok':True}
-    raise ValueError('Nieznana akcja: użyj type, key, state lub release')
+    raise UserError('UNKNOWN_ACTION')
 
 def emit(value):
     print(json.dumps(value, ensure_ascii=False),flush=True)
@@ -153,22 +157,27 @@ Capture a frame: davekvm-grabber snapshot video0 > frame.jpg''')
     if not args: device='video0'
     elif len(args)==2 and args[0]=='--device' and re.fullmatch(r'(?:remote-)?video[0-9]+', args[1]): device=args[1]
     else:
-        print('Użycie: davekvm-control [--device video0|remote-video0] [--help]',file=sys.stderr);return 2
-    client=Client(device)
+        print(message('CLI_USAGE_CONTROL'),file=sys.stderr);return 2
+    try:
+        client=Client(device)
+    except UserError as exc:
+        print('davekvm-control: '+str(exc),file=sys.stderr);return 1
     def stop(signum, frame): raise SystemExit(128+signum)
     signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGHUP,stop)
     try:
         client.acquire();emit({'event':'ready','device':device,'target':device})
         for line in sys.stdin:
             try:
-                if len(line)>8192: raise ValueError('Polecenie jest zbyt długie')
+                if len(line)>8192: raise UserError('COMMAND_TOO_LONG')
                 emit(execute(client,json.loads(line)))
             except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
-                emit({'ok':False,'error':str(exc)})
+                code = exc.code if isinstance(exc, UserError) else 'INVALID_REQUEST'
+                emit({'ok':False,'error_code':code,'error':message(code)})
                 if client.failure: return 1
         return 0
-    except (OSError,RuntimeError,KeyError) as exc:
-        print('davekvm-control: '+str(exc),file=sys.stderr);return 1
+    except (OSError,RuntimeError,KeyError,UserError) as exc:
+        code = exc.code if isinstance(exc, UserError) else 'UNEXPECTED_ERROR'
+        print('davekvm-control: '+message(code),file=sys.stderr);return 1
     finally: client.close()
 
 if __name__=='__main__':

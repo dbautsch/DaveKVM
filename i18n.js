@@ -36,6 +36,16 @@ const translations = {
   'Sterowanie wygasło lub jest zajęte': ['Control has expired or is busy', 'Steuerung ist abgelaufen oder belegt', 'Ovládání vypršelo nebo je obsazené'],
   'Sterowanie wygasło': ['Control has expired', 'Steuerung ist abgelaufen', 'Ovládání vypršelo'],
   'Połączenie z CH9329 zostało przerwane': ['Connection to CH9329 was interrupted', 'Verbindung zu CH9329 wurde unterbrochen', 'Spojení s CH9329 bylo přerušeno'],
+  'Brak odpowiedzi z mostu SSH': ['No response from the SSH bridge', 'Keine Antwort von der SSH-Brücke', 'Most SSH neodpovídá'],
+  'Błędna odpowiedź z mostu SSH': ['Invalid response from the SSH bridge', 'Ungültige Antwort der SSH-Brücke', 'Neplatná odpověď mostu SSH'],
+  'Błąd klawiatury zdalnej': ['Remote keyboard error', 'Fehler der entfernten Tastatur', 'Chyba vzdálené klávesnice'],
+  'Nieobsługiwana komenda': ['Unsupported command', 'Nicht unterstützter Befehl', 'Nepodporovaný příkaz'],
+  'Brak poprawnego potwierdzenia z CH9329': ['Invalid acknowledgement from CH9329', 'Ungültige Bestätigung von CH9329', 'Neplatné potvrzení od CH9329'],
+  'Nie znaleziono adaptera CH340G': ['CH340 adapter not found', 'CH340-Adapter nicht gefunden', 'Adaptér CH340 nebyl nalezen'],
+  'Nieprawidłowe żądanie': ['Invalid request', 'Ungültige Anfrage', 'Neplatný požadavek'],
+  'Dostęp zabroniony': ['Access denied', 'Zugriff verweigert', 'Přístup odepřen'],
+  'Nie znaleziono zasobu': ['Resource not found', 'Ressource nicht gefunden', 'Zdroj nebyl nalezen'],
+  'Nieoczekiwany błąd': ['Unexpected error', 'Unerwarteter Fehler', 'Neočekávaná chyba'],
   'Sterowanie wyłączone.': ['Control disabled.', 'Steuerung deaktiviert.', 'Ovládání vypnuto.'],
   'Łączenie z klawiaturą…': ['Connecting to keyboard…', 'Verbindung zur Tastatur…', 'Připojování klávesnice…'],
   'Nie udało się przechwycić myszy.': ['Could not capture the mouse.', 'Maus konnte nicht erfasst werden.', 'Myš nelze zachytit.'],
@@ -74,6 +84,32 @@ const translations = {
   'Przeglądarka nie obsługuje wybranego kodeka: ': ['Browser does not support the selected codec: ', 'Browser unterstützt den ausgewählten Codec nicht: ', 'Prohlížeč nepodporuje vybraný kodek: '],
   'Bufor: ': ['Buffer: ', 'Puffer: ', 'Vyrovnávací paměť: '],
 };
+
+// Canonical Polish text lets the DOM translator update an existing message
+// when the user changes language without asking the backend again.
+const backendErrorText = {
+  NO_KEYBOARD_MAPPING: 'Do tego grabbera nie przypisano klawiatury',
+  KEYBOARD_BUSY: 'Klawiatura jest zajęta przez innego użytkownika',
+  KEYBOARD_CONNECT_FAILED: 'Nie można połączyć się z CH9329',
+  CONTROL_EXPIRED_OR_BUSY: 'Sterowanie wygasło lub jest zajęte',
+  CONTROL_EXPIRED: 'Sterowanie wygasło',
+  KEYBOARD_DISCONNECTED: 'Połączenie z CH9329 zostało przerwane',
+  BRIDGE_TIMEOUT: 'Brak odpowiedzi z mostu SSH',
+  BRIDGE_INVALID_RESPONSE: 'Błędna odpowiedź z mostu SSH',
+  REMOTE_KEYBOARD_ERROR: 'Błąd klawiatury zdalnej',
+  UNSUPPORTED_COMMAND: 'Nieobsługiwana komenda',
+  CH9329_INVALID_ACK: 'Brak poprawnego potwierdzenia z CH9329',
+  CH340_NOT_FOUND: 'Nie znaleziono adaptera CH340G',
+  INVALID_REQUEST: 'Nieprawidłowe żądanie',
+  FORBIDDEN: 'Dostęp zabroniony',
+  NOT_FOUND: 'Nie znaleziono zasobu',
+};
+
+function backendError(code, legacyMessage) {
+  if (!code) return legacyMessage || 'Nieoczekiwany błąd';
+  return Object.prototype.hasOwnProperty.call(backendErrorText, code)
+    ? backendErrorText[code] : 'Nieoczekiwany błąd';
+}
 
 function translateText(value, language) {
   if (language === 'pl') return value;

@@ -98,6 +98,7 @@ environment; keep private values out of version control.
 | --- | --- | --- |
 | `DAVEKVM_PASSWORD_FILE` | `~/.config/davekvm/password` | UTF-8 password file, at least 16 characters |
 | `DAVEKVM_USERNAME` | `davekvm` | Basic authentication username |
+| `DAVEKVM_LANG` | system locale, otherwise `en` | Python messages: `pl`, `en`, `de` or `cs` |
 | `DAVEKVM_LISTEN` | `127.0.0.1` | Bind address |
 | `DAVEKVM_PORT` | `8080` | Bind port |
 | `DAVEKVM_ORIGIN` | `http://127.0.0.1:8080` | Exact public browser origin, including port if needed |
@@ -130,6 +131,19 @@ For example, `{"action":"key","key":"Enter"}` presses and releases Enter;
 `{"action":"type","text":"hello"}` types US-layout ASCII. It also accepts
 `state`, `release`, `mouse` and `mouse_relative`; run `--help` for details.
 Remote IDs have the form `remote-video0`.
+
+Control failures include a stable `error_code` and a localized `error` string;
+automation should branch on the code, not the translated text. The web API
+selects the message language from the `davekvm_language` cookie, or from
+`Accept-Language` when the cookie is absent. Unsupported languages fall back
+to English. The CLI uses `DAVEKVM_LANG`, then the system locale. For example:
+
+```json
+{"ok":false,"error_code":"KEYBOARD_BUSY","error":"Keyboard is in use by another user"}
+```
+
+Clients can continue to read the `error` field. Codes are defined in
+[`messages.py`](messages.py); keep that file alongside the CLI and SSH bridge.
 
 ### Agent automation examples
 

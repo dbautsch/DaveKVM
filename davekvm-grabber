@@ -2,8 +2,9 @@
 # Copyright (c) 2026 Dawid Bautsch
 # SPDX-License-Identifier: MIT
 """Access the local DaveKVM grabber API over an authenticated SSH login."""
-import base64, os, re, sys, urllib.error, urllib.parse, urllib.request
+import base64, json, os, re, sys, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
+from messages import message
 
 def main():
     args = sys.argv[1:]
@@ -12,10 +13,14 @@ def main():
     elif len(args) == 2 and args[0] in ('snapshot', 'stream') and re.fullmatch(r'(?:remote-)?video[0-9]+', args[1]):
         path = '/grabber/' + args[0] + '/' + args[1] + ('.jpg' if args[0] == 'snapshot' else '')
     else:
-        print('Użycie: davekvm-grabber list | davekvm-grabber snapshot ID | davekvm-grabber stream ID', file=sys.stderr)
+        print(message('CLI_USAGE_GRABBER'), file=sys.stderr)
         return 2
     try:
-        password = Path(os.environ.get('DAVEKVM_PASSWORD_FILE', str(Path.home() / '.config/davekvm/password'))).read_text().strip()
+        try:
+            password = Path(os.environ.get('DAVEKVM_PASSWORD_FILE', str(Path.home() / '.config/davekvm/password'))).read_text(encoding='utf-8').strip()
+        except (OSError, UnicodeError):
+            print(message('PASSWORD_FILE_ERROR'), file=sys.stderr)
+            return 1
         token = base64.b64encode((os.environ.get('DAVEKVM_USERNAME', 'davekvm') + ':' + password).encode()).decode()
         request = urllib.request.Request(os.environ.get('DAVEKVM_BASE_URL', 'http://127.0.0.1:8080').rstrip('/') + path, headers={'Authorization': 'Basic ' + token, 'Host': urllib.parse.urlsplit(os.environ.get('DAVEKVM_ORIGIN', os.environ.get('DAVEKVM_BASE_URL', 'http://127.0.0.1:8080'))).netloc})
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -26,8 +31,13 @@ def main():
                 sys.stdout.buffer.write(chunk)
                 sys.stdout.buffer.flush()
         return 0
-    except (OSError, urllib.error.URLError) as exc:
-        print('Nie udało się pobrać obrazu:', exc, file=sys.stderr)
+    except urllib.error.HTTPError as exc:
+        try: code = json.load(exc).get('error_code')
+        except (ValueError, UnicodeError, AttributeError): code = None
+        print(message(code or 'HTTP_ERROR'), file=sys.stderr)
+        return 1
+    except (OSError, urllib.error.URLError):
+        print(message('CAPTURE_FAILED'), file=sys.stderr)
         return 1
 
 if __name__ == '__main__':

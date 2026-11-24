@@ -4,55 +4,72 @@
 import base64, fcntl, glob, hmac, json, os, re, secrets, select, signal, socket, socketserver, struct, subprocess, threading, time, urllib.parse
 import serial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
+from messages import message, normalize_language
 
 # Configuration is supplied by the operator. No credentials or device mappings
 # are embedded in the project; only loopback is bound by default.
+def configured_integer(name, default, error_code):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        raise ValueError(message(error_code)) from None
+
+
 BASE = Path(__file__).resolve().parent
 PASSWORD = None
 USERNAME = os.environ.get('DAVEKVM_USERNAME', 'davekvm')
 HOST = os.environ.get('DAVEKVM_LISTEN', '127.0.0.1')
-PORT = int(os.environ.get('DAVEKVM_PORT', '8080'))
+PORT = configured_integer('DAVEKVM_PORT', '8080', 'INVALID_PORT')
+if not 1 <= PORT <= 65535:
+    raise ValueError(message('INVALID_PORT'))
 CAPTURE_SIZE = os.environ.get('DAVEKVM_CAPTURE_SIZE', '1280x720')
 if not re.fullmatch(r'[1-9][0-9]{2,3}x[1-9][0-9]{2,3}', CAPTURE_SIZE):
-    raise ValueError('Invalid capture dimensions')
-LOCAL_FPS = int(os.environ.get('DAVEKVM_LOCAL_FPS', '60'))
-REMOTE_FPS = int(os.environ.get('DAVEKVM_REMOTE_FPS', '30'))
+    raise ValueError(message('INVALID_CAPTURE_DIMENSIONS'))
+LOCAL_FPS = configured_integer('DAVEKVM_LOCAL_FPS', '60', 'INVALID_CAPTURE_RATE')
+REMOTE_FPS = configured_integer('DAVEKVM_REMOTE_FPS', '30', 'INVALID_CAPTURE_RATE')
 if not 1 <= LOCAL_FPS <= 120 or not 1 <= REMOTE_FPS <= 120:
-    raise ValueError('Capture rates must be between 1 and 120 fps')
+    raise ValueError(message('INVALID_CAPTURE_RATE'))
 ORIGIN = os.environ.get('DAVEKVM_ORIGIN', f'http://127.0.0.1:{PORT}').rstrip('/')
 REMOTE_ALIAS = os.environ.get('DAVEKVM_REMOTE_SSH_ALIAS', '')
 if REMOTE_ALIAS and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', REMOTE_ALIAS):
-    raise ValueError('Invalid SSH host alias')
+    raise ValueError(message('INVALID_SSH_ALIAS'))
 SSH = ['/usr/bin/ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
        '-o', 'ConnectTimeout=3', '-o', 'ServerAliveInterval=10', '-o',
        'ServerAliveCountMax=3', REMOTE_ALIAS] if REMOTE_ALIAS else None
-SERIAL_MAP = json.loads(os.environ.get('DAVEKVM_SERIAL_MAP', '{}'))
+try:
+    SERIAL_MAP = json.loads(os.environ.get('DAVEKVM_SERIAL_MAP', '{}'))
+except (ValueError, TypeError):
+    raise ValueError(message('INVALID_SERIAL_MAP')) from None
 if not isinstance(SERIAL_MAP, dict):
-    raise ValueError('DAVEKVM_SERIAL_MAP must be a JSON object')
+    raise ValueError(message('INVALID_SERIAL_MAP'))
 for device, target in SERIAL_MAP.items():
     if not isinstance(device, str) or not re.fullmatch(r'(?:remote-)?video[0-9]+', device):
-        raise ValueError('Invalid capture device mapping')
+        raise ValueError(message('INVALID_DEVICE_MAPPING'))
     if not isinstance(target, str):
-        raise ValueError('Invalid keyboard target')
+        raise ValueError(message('INVALID_KEYBOARD_TARGET'))
     if device.startswith('remote-'):
         if not SSH or not re.fullmatch(r'ssh:video[0-9]+', target):
-            raise ValueError('Remote keyboard requires configured SSH alias and video ID')
+            raise ValueError(message('REMOTE_MAPPING_INVALID'))
     elif not (target.startswith('/dev/serial/by-id/') or target.startswith('/dev/serial/by-path/')):
-        raise ValueError('Local keyboard must use a stable /dev/serial path')
+        raise ValueError(message('SERIAL_PATH_INVALID'))
 
 
 def validate_origin():
     origin = urllib.parse.urlsplit(ORIGIN)
     if origin.scheme not in ('http', 'https') or not origin.hostname or origin.username or origin.password or origin.path or origin.query or origin.fragment or not 1 <= PORT <= 65535:
-        raise ValueError('DAVEKVM_ORIGIN must be an http(s) origin without path or credentials')
+        raise ValueError(message('INVALID_ORIGIN'))
 
 
 def load_password():
     path = Path(os.environ.get('DAVEKVM_PASSWORD_FILE', str(Path.home() / '.config/davekvm/password')))
-    secret = path.read_text(encoding='utf-8').strip()
+    try:
+        secret = path.read_text(encoding='utf-8').strip()
+    except (OSError, UnicodeError):
+        raise ValueError(message('PASSWORD_FILE_ERROR')) from None
     if len(secret) < 16 or ':' in USERNAME or not USERNAME:
-        raise ValueError('Set a username and a password of at least 16 characters')
+        raise ValueError(message('INVALID_CREDENTIALS_CONFIG'))
     return secret
 
 
@@ -97,34 +114,34 @@ def first_valid_frame(stream):
     for _ in range(30):
         boundary = stream.readline(128)
         if boundary != b'--frame\r\n':
-            raise ValueError('invalid multipart boundary')
+            raise ValueError(message('INVALID_MULTIPART_BOUNDARY'))
         headers = []
         length = None
         while True:
             line = stream.readline(1024)
             if not line or len(headers) >= 16:
-                raise ValueError('invalid multipart headers')
+                raise ValueError(message('INVALID_MULTIPART_HEADERS'))
             headers.append(line)
             if line.lower().startswith(b'content-length:'):
                 length = int(line.split(b':', 1)[1].strip())
             if line == b'\r\n':
                 break
         if length is None or not 0 < length <= 8 * 1024 * 1024:
-            raise ValueError('invalid frame length')
+            raise ValueError(message('INVALID_FRAME_LENGTH'))
         chunks = []
         remaining = length
         while remaining:
             chunk = stream.read(remaining)
             if not chunk:
-                raise EOFError('incomplete frame')
+                raise EOFError(message('INCOMPLETE_FRAME'))
             chunks.append(chunk)
             remaining -= len(chunk)
         frame = b''.join(chunks)
         if stream.read(2) != b'\r\n':
-            raise ValueError('invalid frame terminator')
+            raise ValueError(message('INVALID_FRAME_TERMINATOR'))
         if frame.startswith(b'\xff\xd8') and frame.endswith(b'\xff\xd9'):
             return boundary + b''.join(headers) + frame + b'\r\n'
-    raise ValueError('no valid JPEG frame')
+    raise ValueError(message('NO_VALID_FRAME'))
 
 class Capture:
     """One reader per device; slow clients skip frames instead of building a queue."""
@@ -164,7 +181,7 @@ class Capture:
                     raise RuntimeError(self.error)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError('Nie udało się pobrać klatki.')
+                    raise TimeoutError(message('FRAME_TIMEOUT'))
                 self.condition.wait(remaining)
 
     def watch(self, proc, remote):
@@ -180,7 +197,7 @@ class Capture:
                 idle = self.clients == 0 and time.monotonic() - self.idle_since >= 5
                 if idle:
                     # Keep acquisition serialized with the idle transition.
-                    self.error = 'Przechwytywanie zostało zatrzymane.'
+                    self.error = message('CAPTURE_STOPPED')
                     self.frame = None
                     self.condition.notify_all()
                     proc.terminate()
@@ -207,7 +224,7 @@ class Capture:
                     self.condition.notify_all()
         except (OSError, EOFError, ValueError) as exc:
             with self.condition:
-                self.error = str(exc) or 'Strumień jest niedostępny.'
+                self.error = str(exc) or message('STREAM_UNAVAILABLE')
                 self.frame = None
                 self.condition.notify_all()
         finally:
@@ -244,30 +261,30 @@ def web_encoder_options(query):
                 'qsv_preset': 'veryfast', 'qsv_profile': 'baseline', 'qsv_mode': 'cbr',
                 'qsv_quality': '18', 'qsv_gop': '30'}
     if set(values) - set(defaults) or any(len(value) != 1 for value in values.values()):
-        raise ValueError('Nieprawidłowe ustawienia kodera')
+        raise ValueError(message('INVALID_ENCODER_SETTINGS'))
     options = {name: values.get(name, [value])[0] for name, value in defaults.items()}
     if options['encoder'] not in ('x264', 'h264_qsv', 'hevc_qsv'):
-        raise ValueError('Nieprawidłowy koder')
+        raise ValueError(message('INVALID_ENCODER'))
     if options['preset'] not in ('ultrafast', 'superfast', 'veryfast'):
-        raise ValueError('Nieprawidłowy preset')
+        raise ValueError(message('INVALID_PRESET'))
     if not re.fullmatch(r'(?:[1-9]|[12][0-9]|30)', options['crf']):
-        raise ValueError('CRF musi być liczbą od 1 do 30')
+        raise ValueError(message('INVALID_CRF'))
     if not re.fullmatch(r'[0-9]{4,5}', options['bitrate']) or not 1000 <= int(options['bitrate']) <= 30000:
-        raise ValueError('Bitrate musi wynosić od 1000 do 30000 kb/s')
+        raise ValueError(message('INVALID_BITRATE'))
     if options['qsv_preset'] not in ('veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'):
-        raise ValueError('Nieprawidłowy preset Quick Sync')
+        raise ValueError(message('INVALID_QSV_PRESET'))
     if options['qsv_profile'] not in ('baseline', 'main', 'high'):
-        raise ValueError('Nieprawidłowy profil Quick Sync')
+        raise ValueError(message('INVALID_QSV_PROFILE'))
     if options['qsv_mode'] not in ('cbr', 'vbr', 'icq', 'cqp'):
-        raise ValueError('Nieprawidłowy tryb Quick Sync')
+        raise ValueError(message('INVALID_QSV_MODE'))
     if not re.fullmatch(r'(?:[1-9]|[1-4][0-9]|5[01])', options['qsv_quality']):
-        raise ValueError('Jakość Quick Sync musi wynosić od 1 do 51')
+        raise ValueError(message('INVALID_QSV_QUALITY'))
     if not re.fullmatch(r'[0-9]{1,3}', options['qsv_gop']) or not 15 <= int(options['qsv_gop']) <= 300:
-        raise ValueError('Odstęp klatek kluczowych musi wynosić od 15 do 300')
+        raise ValueError(message('INVALID_KEYFRAME_INTERVAL'))
     if options['qsv_mode'] == 'vbr' and int(options['bitrate']) == 30000:
-        raise ValueError('VBR wymaga bitrate poniżej 30 Mb/s')
+        raise ValueError(message('INVALID_VBR_BITRATE'))
     if options['encoder'] == 'hevc_qsv' and options['qsv_profile'] not in ('baseline', 'main'):
-        raise ValueError('H.265 Quick Sync obsługuje profil main')
+        raise ValueError(message('INVALID_HEVC_PROFILE'))
     return options
 
 
@@ -300,7 +317,7 @@ def web_encoder_command(name, options=None):
             bitrate = int(options['bitrate'])
             maximum = bitrate if mode == 'cbr' else min(30000, bitrate * 2)
             if mode == 'vbr' and maximum == bitrate:
-                raise ValueError('VBR wymaga bitrate poniżej 30 Mb/s')
+                raise ValueError(message('INVALID_VBR_BITRATE'))
             command += ['-b:v', str(bitrate) + 'k', '-maxrate', str(maximum) + 'k',
                         '-bufsize', str(maximum // 8) + 'k']
     if encoder == 'x264':
@@ -345,7 +362,7 @@ keyboards = {name: Keyboard(name, mapping, SSH) for name, mapping in SERIAL_MAP.
 def keyboard_for_token(token):
     for item in keyboards.values():
         if item.token and hmac.compare_digest(item.token, token): return item
-    raise KeyboardError('Sterowanie wygasło lub jest zajęte')
+    raise KeyboardError('CONTROL_EXPIRED_OR_BUSY')
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
@@ -354,6 +371,27 @@ class Server(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
+
+    def request_language(self):
+        try:
+            cookie = SimpleCookie()
+            cookie.load(self.headers.get('Cookie', ''))
+            if 'davekvm_language' in cookie:
+                return normalize_language(cookie['davekvm_language'].value)
+        except (CookieError, ValueError, TypeError):
+            pass
+        return normalize_language(self.headers.get('Accept-Language', '').split(',', 1)[0].split(';', 1)[0])
+
+    def reply_error(self, status, code):
+        payload = json.dumps({'error_code': code, 'error': message(code, self.request_language())},
+                             ensure_ascii=False).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def authenticate(self):
         try:
             scheme, encoded = self.headers.get('Authorization', '').split(' ', 1)
@@ -369,7 +407,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.authenticate(): return
         if self.headers.get('Host', '').lower() != urllib.parse.urlsplit(ORIGIN).netloc.lower():
-            self.send_error(403); return
+            self.reply_error(403, 'FORBIDDEN'); return
         url = urllib.parse.urlsplit(self.path)
         path = url.path
         if path == '/grabber':
@@ -390,22 +428,22 @@ class Handler(BaseHTTPRequestHandler):
             operation, name = match.groups()
             if name in {d['id'] for d in all_devices()}:
                 try: options = web_encoder_options(url.query)
-                except ValueError: self.send_error(400, 'Invalid encoder settings'); return
+                except ValueError: self.reply_error(400, 'INVALID_ENCODER_SETTINGS'); return
                 if operation == 'web-h264' and options['encoder'] == 'hevc_qsv':
-                    self.send_error(400, 'HEVC requires web-video'); return
+                    self.reply_error(400, 'HEVC_REQUIRES_WEB_VIDEO'); return
                 self.web_h264(name, options); return
         match = re.fullmatch(r'/grabber/(stream|snapshot)/((?:remote-)?video[0-9]+)(?:\.jpg)?', path)
         if match:
             operation, name = match.groups()
             if name in {d['id'] for d in all_devices()}:
                 self.capture(name, operation == 'snapshot'); return
-        self.send_error(404)
+        self.reply_error(404, 'NOT_FOUND')
     def do_POST(self):
         if not self.authenticate(): return
         if self.headers.get('Host', '').lower() != urllib.parse.urlsplit(ORIGIN).netloc.lower() or self.headers.get('Origin', '') != ORIGIN:
-            self.send_error(403); return
+            self.reply_error(403, 'FORBIDDEN'); return
         if self.headers.get('Sec-Fetch-Site', 'same-origin') != 'same-origin' or self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower() != 'application/json':
-            self.send_error(403); return
+            self.reply_error(403, 'FORBIDDEN'); return
         self.connection.settimeout(5)
         try:
             length = int(self.headers.get('Content-Length', '-1'))
@@ -415,7 +453,7 @@ class Handler(BaseHTTPRequestHandler):
             action = urllib.parse.urlsplit(self.path).path
             if action == '/grabber/api/keyboard/acquire':
                 device = data.get('device')
-                if device not in keyboards: raise KeyboardError('Do tego grabbera nie przypisano klawiatury')
+                if device not in keyboards: raise KeyboardError('NO_KEYBOARD_MAPPING')
                 token = keyboards[device].acquire(device)
                 result = {'token': token}
             elif action in ('/grabber/api/keyboard/state', '/grabber/api/keyboard/release', '/grabber/api/keyboard/mouse', '/grabber/api/keyboard/mouse-relative'):
@@ -439,20 +477,18 @@ class Handler(BaseHTTPRequestHandler):
                     keyboard.update(token, modifiers, keys)
                 result = {'ok': True}
             else:
-                self.send_error(404); return
+                self.reply_error(404, 'NOT_FOUND'); return
             self.reply(json.dumps(result).encode(), 'application/json')
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
-            self.send_error(400)
+            self.reply_error(400, 'INVALID_REQUEST')
         except KeyboardError as exc:
-            self.send_response(409)
-            payload = json.dumps({'error': str(exc)}).encode()
-            self.send_header('Content-Type', 'application/json'); self.send_header('Cache-Control', 'no-store'); self.send_header('Content-Length', str(len(payload))); self.end_headers(); self.wfile.write(payload)
+            self.reply_error(409, exc.code)
 
     def reply(self, data, kind):
         self.send_response(200); self.send_header('Content-Type', kind); self.send_header('Content-Length', str(len(data))); self.send_header('Cache-Control', 'no-store'); self.send_header('X-Content-Type-Options', 'nosniff'); self.end_headers(); self.wfile.write(data)
     def web_h264(self, name, options=None):
         if not web_encoder_slots.acquire(blocking=False):
-            self.send_error(503, 'H264 encoder busy')
+            self.reply_error(503, 'ENCODER_BUSY')
             return
 
         stopped = threading.Event()
@@ -474,10 +510,10 @@ class Handler(BaseHTTPRequestHandler):
             feeder.start()
             feeder_started = True
             if not select.select([proc.stdout], [], [], 15)[0]:
-                raise RuntimeError('Przekroczono czas uruchamiania kodera H.264')
+                raise RuntimeError(message('ENCODER_TIMEOUT'))
             first = os.read(proc.stdout.fileno(), 16384)
             if not first:
-                raise RuntimeError('Nie udało się uruchomić kodera H.264')
+                raise RuntimeError(message('ENCODER_START_FAILED'))
             self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
             self.connection.settimeout(3)
             self.send_response(200)
@@ -494,7 +530,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk)
         except (OSError, RuntimeError):
             if not started:
-                try: self.send_error(503)
+                try: self.reply_error(503, 'ENCODER_UNAVAILABLE')
                 except OSError: pass
         finally:
             stopped.set()
@@ -543,7 +579,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(frame)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, RuntimeError, OSError):
             if not started:
-                try: self.send_error(503)
+                try: self.reply_error(503, 'CAPTURE_UNAVAILABLE')
                 except OSError: pass
         finally:
             capture.release()
@@ -556,7 +592,7 @@ def shutdown_keyboard(signum, frame):
 if __name__ == '__main__':
     signal.signal(signal.SIGTERM, shutdown_keyboard)
     if HOST not in ('127.0.0.1', 'localhost') and os.environ.get('DAVEKVM_ALLOW_INSECURE_REMOTE') != '1':
-        raise SystemExit('Non-loopback HTTP requires explicit DAVEKVM_ALLOW_INSECURE_REMOTE=1; prefer a TLS proxy')
+        raise SystemExit(message('INSECURE_BIND'))
     validate_origin()
     PASSWORD = load_password()
     Server((HOST, PORT), Handler).serve_forever()

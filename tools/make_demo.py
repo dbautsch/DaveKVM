@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from messages import message
 
 
 def svg_for(kind: str) -> str:
@@ -31,7 +33,7 @@ def svg_for(kind: str) -> str:
 <text x="75" y="270" font-family="monospace" font-size="25" fill="#e6edf2">operator@demo:~$ _</text>
 <text x="75" y="620" font-family="sans-serif" font-size="22" fill="#8da5bb">Synthetic example - no real device data</text>
 </svg>'''
-    raise ValueError('unknown demo')
+    raise ValueError(message('UNKNOWN_DEMO'))
 
 
 def render_demo(html: str, kind: str) -> str:
@@ -43,16 +45,16 @@ def render_demo(html: str, kind: str) -> str:
             "renderControl();const language=document.querySelector('#language');"
             "language.value='en';language.dispatchEvent(new Event('change'));},300);</script>")
     if html.count('<script>') != 1 or html.count('</body>') != 1:
-        raise ValueError('unexpected panel structure')
+        raise ValueError(message('INVALID_PANEL_STRUCTURE'))
     return html.replace('<script>', mock + '<script>', 1).replace('</body>', demo + '</body>', 1)
 
 
 def main() -> None:
     if len(sys.argv) != 2:
-        raise SystemExit('Usage: make_demo.py EXISTING_OUTPUT_DIRECTORY')
+        raise SystemExit(message('DEMO_USAGE'))
     output = Path(sys.argv[1])
     if not output.is_dir():
-        raise ValueError('output directory must already exist')
+        raise ValueError(message('OUTPUT_DIRECTORY_REQUIRED'))
     html = (ROOT / 'index.html').read_text(encoding='utf-8')
     for kind in ('desktop', 'console'):
         (output / f'{kind}.html').write_text(render_demo(html, kind), encoding='utf-8')

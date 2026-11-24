@@ -7,6 +7,9 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from messages import message
+
 BEGIN = '// BEGIN DAVEKVM I18N\n'
 END = '\n// END DAVEKVM I18N\n'
 SELECTOR = ('<label class="language-picker">Language / Język '
@@ -19,22 +22,22 @@ SELECTOR = ('<label class="language-picker">Language / Język '
 def embed(text: str, source: str) -> str:
     if BEGIN in text:
         if text.count(BEGIN) != 1 or text.count(END) != 1:
-            raise ValueError('invalid existing translation markers')
+            raise ValueError(message('INVALID_TRANSLATION_MARKERS'))
         start = text.index(BEGIN)
         stop = text.index(END, start) + len(END)
         text = text[:start] + text[stop:]
     if 'id="language"' not in text:
         if text.count('</header>') != 1:
-            raise ValueError('expected exactly one header')
+            raise ValueError(message('EXPECTED_HEADER'))
         text = text.replace('</header>', SELECTOR + '</header>', 1)
     if text.count('<script>') != 1:
-        raise ValueError('expected one inline panel script')
+        raise ValueError(message('EXPECTED_SCRIPT'))
     return text.replace('<script>', '<script>\n' + BEGIN + source.rstrip() + END, 1)
 
 
 def main() -> None:
     if len(sys.argv) != 2:
-        raise SystemExit('Usage: embed_i18n.py PANEL.html')
+        raise SystemExit(message('EMBED_USAGE'))
     target = Path(sys.argv[1])
     result = embed(target.read_text(encoding='utf-8'), (ROOT / 'i18n.js').read_text(encoding='utf-8'))
     target.write_text(result, encoding='utf-8', newline='\n')
