@@ -1,0 +1,492 @@
+<!doctype html><!-- Copyright (c) 2026 Dawid Bautsch; SPDX-License-Identifier: MIT --><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>DaveKVM</title><style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;background:#0c1015;color:#edf2f7}*{box-sizing:border-box}body{margin:0}header{border-bottom:1px solid #29333f;padding:20px 6%;display:flex;align-items:center;justify-content:space-between}header b{letter-spacing:.06em}header span{color:#8e9eac;font-size:.8rem}main{max-width:1300px;margin:auto;padding:36px 6%}h1{font-size:clamp(1.5rem,3vw,2.3rem);margin:0 0 8px}p{color:#9aabb9}.layout{display:grid;grid-template-columns:260px 1fr;gap:24px;margin-top:28px}.panel{background:#141b23;border:1px solid #293641;border-radius:12px;padding:18px}.label{font-size:.75rem;color:#9aabb9;text-transform:uppercase;letter-spacing:.1em;margin:0 0 14px}.device{width:100%;text-align:left;background:#1c2830;border:1px solid #334953;border-radius:8px;color:#eef6f4;padding:13px;cursor:pointer;margin-bottom:8px}.device:hover,.device.active{border-color:#4dd7b4;background:#18342f}.device small{display:block;color:#9eafa9;margin-top:4px}[hidden]{display:none!important}.screen{position:relative;background:#050708;border:1px solid #293641;border-radius:12px;min-height:340px;display:flex;align-items:center;justify-content:center;overflow:hidden}.screen video{display:block;width:100%;height:auto;touch-action:none;user-select:none}.screen:fullscreen{border:0;border-radius:0;background:#050708}.screen:fullscreen video{width:100%;height:100%;object-fit:contain}.screen-controls{display:none;position:absolute;z-index:2;top:12px;right:12px;align-items:center;gap:10px;padding:10px;border-radius:9px;background:#101820e8;color:#e7f3ef;font-size:.85rem}.screen:fullscreen .screen-controls{display:flex}.screen-controls button{background:#243541;border:1px solid #567;color:#fff;padding:8px;border-radius:7px;cursor:pointer}.keyboard-actions{display:flex;gap:8px;flex-wrap:wrap}.toolbar button:disabled,.screen-controls button:disabled{opacity:.45;cursor:not-allowed}#keyboard.active,#keyboard-full.active{background:#17634e;border-color:#4dd7b4;color:white}.keyboard-help{font-size:.85rem;line-height:1.45;margin:12px 0 0;color:#9aabb9}.keyboard-help.active{color:#83e9cc}.empty{padding:20px;text-align:center;color:#9aabb9}.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px}.toolbar span{color:#9aabb9;font-size:.85rem}.toolbar button{background:#1b252f;border:1px solid #33424f;color:#e6edf2;padding:8px 12px;border-radius:7px;cursor:pointer}button:focus-visible{outline:2px solid #4dd7b4;outline-offset:3px}@media(max-width:720px){.layout{grid-template-columns:1fr}.screen{min-height:200px}main{padding-top:24px}}
+.settings{display:flex;flex-wrap:wrap;align-items:end;gap:10px;margin:0 0 12px}.settings label[hidden]{display:none}.settings label{display:flex;flex-direction:column;gap:4px;font-size:.75rem;color:#9aabb9}.settings select,.settings input,.settings button{background:#1b252f;border:1px solid #33424f;border-radius:6px;color:#e6edf2;padding:7px}.settings input[type=number]{width:78px}.settings .check{flex-direction:row;align-items:center}.screen img{display:block;width:100%;height:auto;touch-action:none;user-select:none}.screen:fullscreen img{width:100%;height:100%;object-fit:contain}.overlay{position:absolute;z-index:3;top:12px;left:12px;padding:8px 10px;border-radius:6px;background:#000c;color:#fff;font:13px/1.5 monospace;white-space:pre;pointer-events:none}</style></head><body><header><b>◉ DaveKVM</b><span>LOKALNY PODGLĄD</span><label class="language-picker">Language / Język <select id="language" aria-label="Language / Język"><option value="pl">Polski</option><option value="en">English</option><option value="de">Deutsch</option><option value="cs">Čeština</option></select></label></header><main><h1>Podgląd na żywo</h1><p>Wybierz urządzenie, aby zobaczyć obraz z wejścia HDMI.</p><div class="layout"><aside class="panel"><p class="label">Podłączone urządzenia</p><div id="devices">Wyszukiwanie…</div></aside><section><div class="toolbar"><span id="status">Wybierz grabber z listy</span><div class="keyboard-actions"><button id="keyboard" type="button" disabled>Włącz sterowanie</button><button id="grab" type="button" disabled>Przechwyć mysz</button><button id="full" type="button">Pełny ekran ⛶</button></div></div><form class="settings" id="settings"><label>Obraz<select id="format"><option value="h264">H.264 (MP4)</option><option value="raw">Oryginalny grabber (MJPEG)</option><option value="h264_qsv" disabled>H.264 Quick Sync</option><option value="hevc_qsv" disabled>H.265 Quick Sync</option></select></label><label id="preset-label">Preset<select id="preset"><option value="ultrafast">ultrafast</option><option value="superfast">superfast</option><option value="veryfast">veryfast</option></select></label><label id="crf-label">CRF<input id="crf" type="number" min="1" max="30" step="1" value="12"></label><label id="qsv-preset-label" hidden>Preset QSV<select id="qsv-preset"><option value="veryfast">veryfast</option><option value="faster">faster</option><option value="fast">fast</option><option value="medium">medium</option><option value="slow">slow</option><option value="slower">slower</option><option value="veryslow">veryslow</option></select></label><label id="qsv-profile-label" hidden>Profil QSV<select id="qsv-profile"></select></label><label id="qsv-mode-label" hidden>Tryb QSV<select id="qsv-mode"><option value="cbr">CBR</option><option value="vbr">VBR</option><option value="cqp">CQP</option></select></label><label class="check" id="qsv-icq-label" hidden><input id="qsv-icq" type="checkbox" checked> ICQ (bez limitu Mb/s)</label><label id="qsv-quality-label" hidden>Jakość QSV (1 najlepsza)<input id="qsv-quality" type="number" min="1" max="51" step="1" value="18"></label><label id="qsv-gop-label" hidden>Klatka kluczowa co (kl.)<input id="qsv-gop" type="number" min="15" max="300" step="1" value="30"></label><label id="bitrate-label" title="W VBR maksimum wynosi dwukrotność wartości, najwyżej 30 Mb/s">Bitrate / limit Mb/s<input id="bitrate" type="number" min="1" max="30" step="0.1" value="8"></label><button type="submit">Zastosuj</button><label class="check"><input id="show-overlay" type="checkbox"> Overlay</label></form><div class="screen" id="screen"><div class="overlay" id="overlay" hidden></div><div class="screen-controls"><span id="full-status">Sterowanie</span><button id="keyboard-full" type="button" disabled>Włącz sterowanie</button><button id="grab-full" type="button" disabled>Przechwyć mysz</button><button id="exit-full" type="button">Zamknij pełny ekran</button></div><div class="empty" id="empty">Tutaj pojawi się obraz</div><video id="video" aria-label="Obraz na żywo z grabbera" autoplay muted playsinline hidden></video><img id="raw-video" alt="Oryginalny obraz z grabbera" hidden></div><p class="keyboard-help" id="keyboard-help" role="status" aria-live="polite">Wybierz grabber, aby sterować przypisaną klawiaturą.</p></section></div></main><script>
+// BEGIN DAVEKVM I18N
+// Copyright (c) 2026 Dawid Bautsch
+// SPDX-License-Identifier: MIT
+// Source for the inline translation block in index.html.
+const translations = {
+  'LOKALNY PODGLĄD': ['LOCAL PREVIEW', 'LOKALE VORSCHAU', 'MÍSTNÍ NÁHLED'],
+  'Podgląd na żywo': ['Live preview', 'Live-Vorschau', 'Živý náhled'],
+  'Wybierz urządzenie, aby zobaczyć obraz z wejścia HDMI.': ['Select a device to view its HDMI input.', 'Wähle ein Gerät für das HDMI-Bild.', 'Vyberte zařízení pro zobrazení vstupu HDMI.'],
+  'Podłączone urządzenia': ['Connected devices', 'Verbundene Geräte', 'Připojená zařízení'],
+  'Wyszukiwanie…': ['Searching…', 'Suche…', 'Vyhledávání…'],
+  'Wybierz grabber z listy': ['Select a capture device', 'Aufnahmegerät auswählen', 'Vyberte snímací zařízení'],
+  'Włącz sterowanie': ['Enable control', 'Steuerung aktivieren', 'Zapnout ovládání'],
+  'Wyłącz sterowanie': ['Disable control', 'Steuerung deaktivieren', 'Vypnout ovládání'],
+  'Przechwyć mysz': ['Capture mouse', 'Maus erfassen', 'Zachytit myš'],
+  'Zwolnij mysz (Ctrl+Alt)': ['Release mouse (Ctrl+Alt)', 'Maus freigeben (Strg+Alt)', 'Uvolnit myš (Ctrl+Alt)'],
+  'Pełny ekran ⛶': ['Fullscreen ⛶', 'Vollbild ⛶', 'Celá obrazovka ⛶'],
+  'Obraz': ['Video', 'Bild', 'Obraz'],
+  'Oryginalny grabber (MJPEG)': ['Original capture (MJPEG)', 'Originalaufnahme (MJPEG)', 'Původní záznam (MJPEG)'],
+  'Profil QSV': ['QSV profile', 'QSV-Profil', 'Profil QSV'],
+  'Tryb QSV': ['QSV mode', 'QSV-Modus', 'Režim QSV'],
+  'ICQ (bez limitu Mb/s)': ['ICQ (unlimited Mb/s)', 'ICQ (ohne Mb/s-Limit)', 'ICQ (bez omezení Mb/s)'],
+  'Jakość QSV (1 najlepsza)': ['QSV quality (1 is best)', 'QSV-Qualität (1 ist am besten)', 'Kvalita QSV (1 je nejlepší)'],
+  'Klatka kluczowa co (kl.)': ['Keyframe interval (frames)', 'Keyframe-Abstand (Bilder)', 'Interval klíčových snímků'],
+  'W VBR maksimum wynosi dwukrotność wartości, najwyżej 30 Mb/s': ['VBR maximum is twice the target, up to 30 Mb/s', 'VBR-Maximum: doppelter Zielwert, höchstens 30 Mb/s', 'Maximum VBR je dvojnásobek cíle, nejvýše 30 Mb/s'],
+  'Zastosuj': ['Apply', 'Anwenden', 'Použít'],
+  'Sterowanie': ['Control', 'Steuerung', 'Ovládání'],
+  'Zamknij pełny ekran': ['Exit fullscreen', 'Vollbild verlassen', 'Ukončit celou obrazovku'],
+  'Tutaj pojawi się obraz': ['Video appears here', 'Hier erscheint das Bild', 'Zde se zobrazí obraz'],
+  'Obraz na żywo z grabbera': ['Live capture video', 'Live-Bild des Aufnahmegeräts', 'Živý obraz ze zařízení'],
+  'Oryginalny obraz z grabbera': ['Original capture video', 'Originalbild des Aufnahmegeräts', 'Původní obraz ze zařízení'],
+  'Wybierz grabber, aby sterować przypisaną klawiaturą.': ['Select a device to control its keyboard.', 'Wähle ein Gerät zur Tastatursteuerung.', 'Vyberte zařízení pro ovládání jeho klávesnice.'],
+  'Nie udało się połączyć z klawiaturą.': ['Could not connect to the keyboard.', 'Verbindung zur Tastatur fehlgeschlagen.', 'Nelze připojit klávesnici.'],
+  'Do tego grabbera nie przypisano klawiatury': ['No keyboard is assigned to this device', 'Diesem Gerät ist keine Tastatur zugeordnet', 'K tomuto zařízení není přiřazena klávesnice'],
+  'Klawiatura jest zajęta przez innego użytkownika': ['Keyboard is in use by another user', 'Tastatur wird von einem anderen Benutzer verwendet', 'Klávesnici používá jiný uživatel'],
+  'Nie można połączyć się z CH9329': ['Could not connect to CH9329', 'Verbindung zu CH9329 fehlgeschlagen', 'Nelze se připojit k CH9329'],
+  'Sterowanie wygasło lub jest zajęte': ['Control has expired or is busy', 'Steuerung ist abgelaufen oder belegt', 'Ovládání vypršelo nebo je obsazené'],
+  'Sterowanie wygasło': ['Control has expired', 'Steuerung ist abgelaufen', 'Ovládání vypršelo'],
+  'Połączenie z CH9329 zostało przerwane': ['Connection to CH9329 was interrupted', 'Verbindung zu CH9329 wurde unterbrochen', 'Spojení s CH9329 bylo přerušeno'],
+  'Sterowanie wyłączone.': ['Control disabled.', 'Steuerung deaktiviert.', 'Ovládání vypnuto.'],
+  'Łączenie z klawiaturą…': ['Connecting to keyboard…', 'Verbindung zur Tastatur…', 'Připojování klávesnice…'],
+  'Nie udało się przechwycić myszy.': ['Could not capture the mouse.', 'Maus konnte nicht erfasst werden.', 'Myš nelze zachytit.'],
+  'Mysz zwolniona. Włącz sterowanie ponownie, aby wrócić.': ['Mouse released. Enable control again to resume.', 'Maus freigegeben. Aktiviere die Steuerung erneut.', 'Myš uvolněna. Pro pokračování znovu zapněte ovládání.'],
+  'Mysz przechwycona. Ctrl+Alt zwalnia mysz i klawiaturę.': ['Mouse captured. Ctrl+Alt releases mouse and keyboard.', 'Maus erfasst. Strg+Alt gibt Maus und Tastatur frei.', 'Myš zachycena. Ctrl+Alt uvolní myš a klávesnici.'],
+  'Sterowanie wyłączone po przerwaniu wskaźnika.': ['Control disabled after pointer cancellation.', 'Steuerung nach Zeigerabbruch deaktiviert.', 'Ovládání vypnuto po přerušení ukazatele.'],
+  'Mysz i klawiatura zwolnione skrótem Ctrl+Alt.': ['Mouse and keyboard released with Ctrl+Alt.', 'Maus und Tastatur mit Strg+Alt freigegeben.', 'Myš a klávesnice uvolněny pomocí Ctrl+Alt.'],
+  'Sterowanie wyłączone po utracie aktywnego okna.': ['Control disabled after window lost focus.', 'Steuerung nach Fokusverlust deaktiviert.', 'Ovládání vypnuto po ztrátě zaměření okna.'],
+  'Sterowanie wyłączone po zmianie karty.': ['Control disabled after tab switch.', 'Steuerung nach Tabwechsel deaktiviert.', 'Ovládání vypnuto po změně karty.'],
+  'Nieprawidłowy nagłówek MP4.': ['Invalid MP4 header.', 'Ungültiger MP4-Header.', 'Neplatná hlavička MP4.'],
+  'Brak konfiguracji kodeka w MP4.': ['MP4 codec configuration is missing.', 'MP4-Codec-Konfiguration fehlt.', 'Chybí konfigurace kodeku MP4.'],
+  'Obraz zatrzymany. Wybierz urządzenie ponownie.': ['Video stopped. Select the device again.', 'Bild angehalten. Wähle das Gerät erneut.', 'Obraz zastaven. Znovu vyberte zařízení.'],
+  'Obraz zatrzymany. Sterowanie wyłączone.': ['Video stopped. Control disabled.', 'Bild angehalten. Steuerung deaktiviert.', 'Obraz zastaven. Ovládání vypnuto.'],
+  'Błąd odtwarzania obrazu H.264.': ['H.264 playback error.', 'H.264-Wiedergabefehler.', 'Chyba přehrávání H.264.'],
+  'Błąd dekodowania obrazu.': ['Video decoding error.', 'Fehler beim Dekodieren des Bildes.', 'Chyba dekódování obrazu.'],
+  'Podgląd niedostępny. Sterowanie wyłączone.': ['Preview unavailable. Control disabled.', 'Vorschau nicht verfügbar. Steuerung deaktiviert.', 'Náhled není dostupný. Ovládání vypnuto.'],
+  'Przeglądarka nie obsługuje strumieni MP4.': ['Browser does not support MP4 streaming.', 'Browser unterstützt kein MP4-Streaming.', 'Prohlížeč nepodporuje streamování MP4.'],
+  'Podgląd H.264 jest niedostępny.': ['H.264 preview unavailable.', 'H.264-Vorschau nicht verfügbar.', 'Náhled H.264 není dostupný.'],
+  'Strumień obrazu został przerwany.': ['Video stream interrupted.', 'Videostream unterbrochen.', 'Stream obrazu byl přerušen.'],
+  'Zbyt duży nagłówek MP4.': ['MP4 header is too large.', 'MP4-Header ist zu groß.', 'Hlavička MP4 je příliš velká.'],
+  'Nie można uruchomić podglądu.': ['Could not start preview.', 'Vorschau konnte nicht gestartet werden.', 'Náhled nelze spustit.'],
+  'Oryginalny obraz jest niedostępny.': ['Original capture is unavailable.', 'Originalbild nicht verfügbar.', 'Původní obraz není dostupný.'],
+  'Nieprawidłowy nagłówek obrazu.': ['Invalid image header.', 'Ungültiger Bild-Header.', 'Neplatná hlavička obrazu.'],
+  'Nieprawidłowy rozmiar obrazu.': ['Invalid image size.', 'Ungültige Bildgröße.', 'Neplatná velikost obrazu.'],
+  'Nieprawidłowa klatka obrazu.': ['Invalid video frame.', 'Ungültiges Videobild.', 'Neplatný snímek obrazu.'],
+  'Nieprawidłowe ustawienia obrazu.': ['Invalid video settings.', 'Ungültige Bildeinstellungen.', 'Neplatné nastavení obrazu.'],
+  'Sterowanie wyłączone podczas zmiany obrazu.': ['Control disabled while changing video.', 'Steuerung beim Bildwechsel deaktiviert.', 'Ovládání vypnuto při změně obrazu.'],
+  'Łączenie obrazu...': ['Connecting video...', 'Bild wird verbunden...', 'Připojování obrazu...'],
+  'Nie wykryto urządzeń.': ['No devices detected.', 'Keine Geräte gefunden.', 'Nebyla nalezena žádná zařízení.'],
+  'Urządzenie zostało odłączone.': ['Device disconnected.', 'Gerät getrennt.', 'Zařízení bylo odpojeno.'],
+  'Nie udało się pobrać listy urządzeń.': ['Could not load the device list.', 'Geräteliste konnte nicht geladen werden.', 'Nelze načíst seznam zařízení.'],
+  'Podgląd · ': ['Preview · ', 'Vorschau · ', 'Náhled · '],
+  'Klawiatura → ': ['Keyboard → ', 'Tastatur → ', 'Klávesnice → '],
+  'Klawiatura steruje ': ['Keyboard controls ', 'Tastatur steuert ', 'Klávesnice ovládá '],
+  '. Kliknij „Wyłącz sterowanie”, aby wrócić do pisania na tym komputerze.': ['. Select “Disable control” to type locally.', '. Wähle „Steuerung deaktivieren“ für lokale Eingaben.', '. Pro místní psaní zvolte „Vypnout ovládání“.'],
+  'Przeglądarka nie obsługuje wybranego kodeka: ': ['Browser does not support the selected codec: ', 'Browser unterstützt den ausgewählten Codec nicht: ', 'Prohlížeč nepodporuje vybraný kodek: '],
+  'Bufor: ': ['Buffer: ', 'Puffer: ', 'Vyrovnávací paměť: '],
+};
+
+function translateText(value, language) {
+  if (language === 'pl') return value;
+  const index = {en: 0, de: 1, cs: 2}[language];
+  if (index === undefined) return value;
+  if (Object.prototype.hasOwnProperty.call(translations, value)) return translations[value][index];
+  let translated = value;
+  for (const key of Object.keys(translations).filter(k => k.startsWith(' ') || k.endsWith(' '))) {
+    translated = translated.split(key).join(translations[key][index]);
+  }
+  return translated;
+}
+
+function initializeLanguage() {
+  const selector = document.querySelector('#language');
+  if (!selector || !document.createTreeWalker || typeof MutationObserver === 'undefined') return;
+  const stored = document.cookie.split(';').map(x => x.trim()).find(x => x.startsWith('davekvm_language='));
+  const storedLanguage = stored ? stored.slice('davekvm_language='.length) : 'pl';
+  let language = ['pl', 'en', 'de', 'cs'].includes(storedLanguage) ? storedLanguage : 'pl';
+  const originals = new WeakMap();
+  const originalAttributes = new WeakMap();
+  const attributes = ['title', 'aria-label', 'alt'];
+  function visit(root) {
+    if (!root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    function update(node) {
+      if (node.nodeType === Node.TEXT_NODE && !['SCRIPT', 'STYLE'].includes(node.parentElement?.tagName)) {
+        const previous = originals.get(node);
+        const original = previous && node.data === previous.rendered ? previous.original : node.data;
+        const leading = original.match(/^\s*/)[0], trailing = original.match(/\s*$/)[0];
+        const core = original.trim();
+        const result = core ? leading + translateText(core, language) + trailing : original;
+        originals.set(node, {original, rendered: result});
+        if (node.data !== result) node.data = result;
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        let saved = originalAttributes.get(node);
+        if (!saved) {
+          saved = {};
+          originalAttributes.set(node, saved);
+        }
+        for (const name of attributes) {
+          if (!node.hasAttribute(name)) continue;
+          if (!(name in saved)) saved[name] = node.getAttribute(name);
+          const result = translateText(saved[name], language);
+          if (node.getAttribute(name) !== result) node.setAttribute(name, result);
+        }
+      }
+    }
+    update(root);
+    while (walker.nextNode()) update(walker.currentNode);
+  }
+  selector.value = language;
+  document.documentElement.lang = language;
+  visit(document.body);
+  const observer = new MutationObserver(records => {
+    for (const record of records) {
+      if (record.type === 'characterData') visit(record.target);
+      else for (const node of record.addedNodes) visit(node);
+    }
+  });
+  observer.observe(document.body, {subtree: true, childList: true, characterData: true});
+  selector.addEventListener('change', () => {
+    language = ['pl', 'en', 'de', 'cs'].includes(selector.value) ? selector.value : 'pl';
+    document.documentElement.lang = language;
+    document.cookie = 'davekvm_language=' + language + '; Max-Age=31536000; Path=/grabber/; SameSite=Lax';
+    visit(document.body);
+  });
+}
+document.addEventListener('DOMContentLoaded', initializeLanguage);
+// END DAVEKVM I18N
+
+
+let controllableDevices=new Set();
+let current=null, controlToken=null, acquiring=false, previewReady=false, pending=Promise.resolve(), heartbeat=null, mouseMove=null, mouseBusy=false;
+const list=document.querySelector('#devices'), status=document.querySelector('#status'), video=document.querySelector('#video'), rawImage=document.querySelector('#raw-video'), empty=document.querySelector('#empty');
+let img=video;
+const formatInput=document.querySelector('#format'), presetInput=document.querySelector('#preset'), crfInput=document.querySelector('#crf'), bitrateInput=document.querySelector('#bitrate'), overlayInput=document.querySelector('#show-overlay'), overlay=document.querySelector('#overlay');
+const qsvPresetInput=document.querySelector('#qsv-preset'), qsvProfileInput=document.querySelector('#qsv-profile'), qsvModeInput=document.querySelector('#qsv-mode'), qsvIcqInput=document.querySelector('#qsv-icq'), qsvQualityInput=document.querySelector('#qsv-quality'), qsvGopInput=document.querySelector('#qsv-gop');
+let applied={format:'h264',preset:'ultrafast',crf:12,bitrate:8000,qsvPreset:'veryfast',qsvProfile:'baseline',qsvMode:'icq',qsvQuality:18,qsvGop:30}, bytesReceived=0, framesPresented=0, lastRtt=null, frameTrackingController=null;
+const keyButton=document.querySelector('#keyboard'), fullKeyButton=document.querySelector('#keyboard-full'), grabButton=document.querySelector('#grab'), fullGrabButton=document.querySelector('#grab-full'), help=document.querySelector('#keyboard-help'), fullStatus=document.querySelector('#full-status');
+const held=new Set(), mods=new Set();
+let relativeX=0,relativeY=0,relativeButtons=0,relativeFrame=null,wasGrabbed=false;
+const modifierCodes={ControlLeft:1,ShiftLeft:2,AltLeft:4,MetaLeft:8,ControlRight:16,ShiftRight:32,AltRight:64,MetaRight:128};
+const codes={Enter:40,Escape:41,Backspace:42,Tab:43,Space:44,Minus:45,Equal:46,BracketLeft:47,BracketRight:48,Backslash:49,IntlHash:50,Semicolon:51,Quote:52,Backquote:53,Comma:54,Period:55,Slash:56,CapsLock:57,PrintScreen:70,ScrollLock:71,Pause:72,Insert:73,Home:74,PageUp:75,Delete:76,End:77,PageDown:78,ArrowRight:79,ArrowLeft:80,ArrowDown:81,ArrowUp:82,NumLock:83,NumpadDivide:84,NumpadMultiply:85,NumpadSubtract:86,NumpadAdd:87,NumpadEnter:88,Numpad1:89,Numpad2:90,Numpad3:91,Numpad4:92,Numpad5:93,Numpad6:94,Numpad7:95,Numpad8:96,Numpad9:97,Numpad0:98,NumpadDecimal:99,IntlBackslash:100,ContextMenu:101,NumpadEqual:103};
+for(let i=0;i<26;i++)codes['Key'+String.fromCharCode(65+i)]=4+i;
+for(let i=1;i<=9;i++)codes['Digit'+i]=29+i;codes.Digit0=39;
+for(let i=1;i<=12;i++)codes['F'+i]=57+i;
+for(let i=13;i<=24;i++)codes['F'+i]=91+i;
+function renderControl(message){
+ const ready=previewReady&&controllableDevices.has(current), active=!!controlToken, target=current;
+ for(const b of [keyButton,fullKeyButton]){b.disabled=!ready||acquiring;b.classList.toggle('active',active);b.textContent=active?'Wyłącz sterowanie':'Włącz sterowanie';b.setAttribute('aria-pressed',String(active))}
+ for(const b of [grabButton,fullGrabButton]){b.disabled=!active;b.textContent=document.pointerLockElement===img?'Zwolnij mysz (Ctrl+Alt)':'Przechwyć mysz'}
+ help.classList.toggle('active',active);help.textContent=message||(active?'Klawiatura steruje '+target+'. Kliknij „Wyłącz sterowanie”, aby wrócić do pisania na tym komputerze.':'Wybierz grabber, aby sterować przypisaną klawiaturą.');
+ fullStatus.textContent=active?'Klawiatura → '+target:'Sterowanie';
+}
+async function post(action,data,keepalive=false){
+ const r=await fetch('/grabber/api/keyboard/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),cache:'no-store',keepalive});
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||'Nie udało się połączyć z klawiaturą.');return j;
+}
+function stop(message){
+ const token=controlToken;controlToken=null;mouseMove=null;relativeX=relativeY=0;if(relativeFrame!==null)cancelAnimationFrame(relativeFrame);relativeFrame=null;if(document.pointerLockElement===img)document.exitPointerLock();held.clear();mods.clear();if(heartbeat)clearInterval(heartbeat);heartbeat=null;renderControl(message);
+ if(token)pending=pending.catch(()=>{}).then(()=>post('release',{token},true)).catch(()=>{});
+}
+function sendState(){
+ const token=controlToken;if(!token)return;let modifiers=0;for(const v of mods)modifiers|=v;
+ const keys=[...held].slice(0,6);
+ pending=pending.then(()=>{if(controlToken!==token)return;return post('state',{token,modifiers,keys})}).catch(e=>{if(controlToken===token)stop(e.message)});
+}
+async function toggle(){
+ if(controlToken){stop('Sterowanie wyłączone.');return}
+ if(!previewReady||!controllableDevices.has(current)||acquiring)return;const selected=current,selectedPreview=previewController;acquiring=true;renderControl('Łączenie z klawiaturą…');
+ try{const data=await post('acquire',{device:current});if(current!==selected||previewController!==selectedPreview||!previewReady||!document.hasFocus()||document.hidden){await post('release',{token:data.token},true);return}controlToken=data.token;held.clear();mods.clear();renderControl();heartbeat=setInterval(sendState,2000)}catch(e){renderControl(e.message)}finally{acquiring=false;renderControl(controlToken?undefined:help.textContent)}
+}
+// Coordinates follow the displayed image, including fullscreen letterboxing.
+function mouseReport(e,wheel=0){
+ const width=img===video?video.videoWidth:rawImage.naturalWidth,height=img===video?video.videoHeight:rawImage.naturalHeight;
+ if(!controlToken||!width||!height)return null;
+ const r=img.getBoundingClientRect(), scale=Math.min(r.width/width,r.height/height);
+ const w=width*scale,h=height*scale,left=r.left+(r.width-w)/2,top=r.top+(r.height-h)/2;
+ if(!w||!h)return null;
+ return {x:Math.max(0,Math.min(4095,Math.round((e.clientX-left)/w*4095))),y:Math.max(0,Math.min(4095,Math.round((e.clientY-top)/h*4095))),buttons:e.buttons&7,wheel};
+}
+function sendMouse(report,coalesce=false){
+ const token=controlToken;if(!token||!report)return;
+ if(coalesce){
+  mouseMove=report;if(mouseBusy)return;mouseBusy=true;
+  pending=pending.catch(()=>{}).then(async()=>{while(mouseMove&&controlToken===token){const latest=mouseMove;mouseMove=null;await post('mouse',{token,...latest})}}).catch(e=>{if(controlToken===token)stop(e.message)}).finally(()=>{mouseBusy=false});
+ }else{
+  pending=pending.then(()=>controlToken===token?post('mouse',{token,...report}):undefined).catch(e=>{if(controlToken===token)stop(e.message)});
+ }
+}
+function sendRelative(x,y,buttons,wheel=0){
+ const token=controlToken;if(!token)return;
+ pending=pending.then(()=>controlToken===token?post('mouse-relative',{token,x,y,buttons,wheel}):undefined).catch(e=>{if(controlToken===token)stop(e.message)});
+}
+function flushRelative(){
+ if(relativeFrame!==null)cancelAnimationFrame(relativeFrame);relativeFrame=null;
+ let x=Math.trunc(relativeX),y=Math.trunc(relativeY);relativeX-=x;relativeY-=y;
+ while(x||y){const dx=Math.max(-127,Math.min(127,x)),dy=Math.max(-127,Math.min(127,y));sendRelative(dx,dy,relativeButtons);x-=dx;y-=dy}
+}
+function grabMouse(){
+ if(!controlToken)return;
+ if(document.pointerLockElement===img){stop('Sterowanie wyłączone.');return}
+ try{const result=img.requestPointerLock();if(result&&result.catch)result.catch(()=>renderControl('Nie udało się przechwycić myszy.'))}catch(e){renderControl('Nie udało się przechwycić myszy.')}
+}
+for(const b of [grabButton,fullGrabButton])b.addEventListener('click',grabMouse);
+document.addEventListener('pointerlockchange',()=>{
+ const locked=document.pointerLockElement===img;
+ if(wasGrabbed&&!locked&&controlToken){wasGrabbed=false;stop('Mysz zwolniona. Włącz sterowanie ponownie, aby wrócić.');return}
+ wasGrabbed=locked;renderControl(locked?'Mysz przechwycona. Ctrl+Alt zwalnia mysz i klawiaturę.':undefined);
+});
+for(const surface of [video,rawImage]){
+surface.addEventListener('pointerdown',e=>{if(!controlToken)return;e.preventDefault();if(document.pointerLockElement===img){flushRelative();relativeButtons=e.buttons&7;sendRelative(0,0,relativeButtons)}else{img.setPointerCapture(e.pointerId);sendMouse(mouseReport(e))}});
+surface.addEventListener('pointermove',e=>{if(!controlToken)return;e.preventDefault();if(document.pointerLockElement===img){relativeX+=e.movementX;relativeY+=e.movementY;relativeButtons=e.buttons&7;if(relativeFrame===null)relativeFrame=requestAnimationFrame(flushRelative)}else sendMouse(mouseReport(e),true)});
+surface.addEventListener('pointerup',e=>{if(!controlToken)return;e.preventDefault();if(document.pointerLockElement===img){flushRelative();relativeButtons=e.buttons&7;sendRelative(0,0,relativeButtons)}else sendMouse(mouseReport(e))});
+surface.addEventListener('pointercancel',()=>{if(controlToken)stop('Sterowanie wyłączone po przerwaniu wskaźnika.')});
+}
+window.addEventListener('contextmenu',e=>{if(controlToken&&(e.target===img||document.pointerLockElement===img))e.preventDefault()});
+for(const surface of [video,rawImage])surface.addEventListener('wheel',e=>{if(!controlToken)return;e.preventDefault();const wheel=e.deltaY<0?1:-1;if(document.pointerLockElement===img){flushRelative();sendRelative(0,0,relativeButtons,wheel)}else sendMouse(mouseReport(e,wheel))},{passive:false});
+for(const b of [keyButton,fullKeyButton])b.addEventListener('click',toggle);
+window.addEventListener('keydown',e=>{if(!controlToken)return;if(document.pointerLockElement===img&&e.ctrlKey&&e.altKey){e.preventDefault();e.stopPropagation();stop('Mysz i klawiatura zwolnione skrótem Ctrl+Alt.');return}const mod=modifierCodes[e.code],key=codes[e.code];if(!mod&&!key)return;e.preventDefault();e.stopPropagation();if(e.repeat)return;if(mod)mods.add(mod);else held.add(key);sendState()},true);
+window.addEventListener('keyup',e=>{if(!controlToken)return;const mod=modifierCodes[e.code],key=codes[e.code];if(!mod&&!key)return;e.preventDefault();e.stopPropagation();if(mod)mods.delete(mod);else held.delete(key);sendState()},true);
+window.addEventListener('blur',()=>{if(controlToken)stop('Sterowanie wyłączone po utracie aktywnego okna.');});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){if(controlToken)stop('Sterowanie wyłączone po zmianie karty.');stopPreview()}else if(current)startPreview(current)});
+document.addEventListener('fullscreenchange',()=>{if(controlToken){held.clear();mods.clear();sendState()}});
+window.addEventListener('pagehide',()=>{stopPreview();if(controlToken)post('release',{token:controlToken},true).catch(()=>{})});
+let previewController=null,previewUrl=null,previewStallTimer=null,rawFrameUrl=null;
+function mimeFromInit(bytes,hevc){
+ const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),tag=hevc?'hvcC':'avcC';
+ for(let offset=0;offset+8<=bytes.length;){
+  const size=view.getUint32(offset);if(size<8||size>1024*1024)throw Error('Nieprawidłowy nagłówek MP4.');
+  if(offset+size>bytes.length)return null;
+  const type=String.fromCharCode(...bytes.subarray(offset+4,offset+8));
+  if(type==='moov'){
+   for(let i=offset+8;i+8<=offset+size;i++){
+    if(String.fromCharCode(...bytes.subarray(i,i+4))!==tag)continue;
+    const length=view.getUint32(i-4),end=i-4+length,start=i+4;
+    if(length<8||end>offset+size||bytes[start]!==1)continue;
+    if(!hevc){if(start+4>end)continue;return 'video/mp4; codecs="avc1.'+[...bytes.subarray(start+1,start+4)].map(x=>x.toString(16).padStart(2,'0')).join('').toUpperCase()+'"'}
+    if(start+13>end)continue;
+    const info=bytes[start+1],space=['','A','B','C'][info>>6],profile=info&31,tier=info&32?'H':'L';
+    const compatibility=view.getUint32(start+2);let reverse=0;
+    for(let bit=0;bit<32;bit++)reverse=((reverse*2)+((compatibility>>>bit)&1))>>>0;
+    const flags=[...bytes.subarray(start+6,start+12)];while(flags.length&&flags[flags.length-1]===0)flags.pop();
+    return 'video/mp4; codecs="hvc1.'+space+profile+'.'+reverse.toString(16).toUpperCase()+'.'+tier+bytes[start+12]+flags.map(x=>'.'+x.toString(16).padStart(2,'0').toUpperCase()).join('')+'"';
+   }
+   throw Error('Brak konfiguracji kodeka w MP4.');
+  }
+  offset+=size;
+ }
+ return null;
+}
+function stopPreview(){
+ previewReady=false;renderControl();
+ if(previewStallTimer!==null)clearTimeout(previewStallTimer);previewStallTimer=null;
+ if(previewController)previewController.abort();previewController=null;
+ frameTrackingController=null;video.pause();video.removeAttribute('src');video.load();rawImage.removeAttribute('src');
+ if(rawFrameUrl)URL.revokeObjectURL(rawFrameUrl);rawFrameUrl=null;
+ if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=null;
+}
+video.addEventListener('playing',()=>{
+ if(img!==video)return;
+ if(previewStallTimer!==null)clearTimeout(previewStallTimer);previewStallTimer=null;
+ if(previewController&&!document.hidden){previewReady=true;status.textContent='Podgląd · '+current;renderControl();trackVideoFrames(previewController)}
+});
+video.addEventListener('waiting',()=>{
+ if(img!==video||!previewController||!previewReady||previewStallTimer!==null)return;
+ const controller=previewController;
+ previewStallTimer=setTimeout(()=>{
+  previewStallTimer=null;if(previewController!==controller)return;
+  stopPreview();status.textContent='Obraz zatrzymany. Wybierz urządzenie ponownie.';
+  if(controlToken)stop('Obraz zatrzymany. Sterowanie wyłączone.');
+ },3000);
+});
+video.addEventListener('error',()=>{
+ if(img!==video||!previewController||!video.error)return;
+ stopPreview();status.textContent='Błąd odtwarzania obrazu H.264.';
+ if(controlToken)stop('Podgląd niedostępny. Sterowanie wyłączone.');
+});
+function sourceUpdated(source,signal){
+ return new Promise((resolve,reject)=>{
+  const cleanup=()=>{source.removeEventListener('updateend',done);source.removeEventListener('error',failed);source.removeEventListener('abort',failed);signal.removeEventListener('abort',failed)};
+  const done=()=>{cleanup();resolve()},failed=()=>{cleanup();reject(Error('Błąd dekodowania obrazu.'))};
+  if(signal.aborted){failed();return}
+  source.addEventListener('updateend',done,{once:true});source.addEventListener('error',failed,{once:true});source.addEventListener('abort',failed,{once:true});signal.addEventListener('abort',failed,{once:true});
+ });
+}
+async function startPreview(id){
+ stopPreview();if(document.hidden)return;
+ const controller=new AbortController();previewController=controller;
+ img=applied.format==='raw'?rawImage:video;video.hidden=img!==video;rawImage.hidden=img!==rawImage;
+ try{
+  if(applied.format==='raw'){await startRaw(id,controller);return}
+  if(!window.MediaSource)throw Error('Przeglądarka nie obsługuje strumieni MP4.');
+  const media=new MediaSource();previewUrl=URL.createObjectURL(media);img.src=previewUrl;
+  await new Promise((resolve,reject)=>{
+   media.addEventListener('sourceopen',resolve,{once:true});
+   controller.signal.addEventListener('abort',()=>reject(new DOMException('Cancelled','AbortError')),{once:true});
+  });
+  const encoder=applied.format==='h264'?'x264':applied.format;
+  const params=new URLSearchParams({encoder,preset:applied.preset,crf:String(applied.crf),bitrate:String(applied.bitrate),qsv_preset:applied.qsvPreset,qsv_profile:applied.qsvProfile,qsv_mode:encoder==='x264'?'cbr':applied.qsvMode,qsv_quality:String(applied.qsvQuality),qsv_gop:String(applied.qsvGop)});
+  const response=await fetch('/grabber/web-video/'+encodeURIComponent(id)+'?'+params,{cache:'no-store',signal:controller.signal});
+  if(!response.ok||!response.body)throw Error('Podgląd H.264 jest niedostępny.');
+  const reader=response.body.getReader();
+  let initial=new Uint8Array(0),mime=null;
+  while(!mime){
+   const {value,done}=await reader.read();if(done)throw Error('Strumień obrazu został przerwany.');
+   bytesReceived+=value.byteLength;
+   if(initial.length+value.length>1024*1024)throw Error('Zbyt duży nagłówek MP4.');
+   const combined=new Uint8Array(initial.length+value.length);combined.set(initial);combined.set(value,initial.length);initial=combined;
+   mime=mimeFromInit(initial,encoder==='hevc_qsv');
+  }
+  if(!MediaSource.isTypeSupported(mime))throw Error('Przeglądarka nie obsługuje wybranego kodeka: '+mime);
+  const source=media.addSourceBuffer(mime);source.appendBuffer(initial);await sourceUpdated(source,controller.signal);
+  while(!controller.signal.aborted){
+   const {value,done}=await reader.read();if(done)throw Error('Strumień obrazu został przerwany.');
+   bytesReceived+=value.byteLength;source.appendBuffer(value);await sourceUpdated(source,controller.signal);
+   if(img.buffered.length){
+    const end=img.buffered.end(img.buffered.length-1),gap=end-img.currentTime;
+    if(gap>0.50)img.currentTime=Math.max(img.buffered.start(0),end-0.10);
+    img.playbackRate=gap>0.15?1.15:1;
+    if(img.currentTime-img.buffered.start(0)>2){source.remove(0,img.currentTime-1);await sourceUpdated(source,controller.signal)}
+   }
+   img.play().catch(()=>{});
+  }
+ }catch(e){
+  if(controller.signal.aborted||previewController!==controller)return;
+  stopPreview();status.textContent=e.message||'Nie można uruchomić podglądu.';
+  if(controlToken)stop('Podgląd niedostępny. Sterowanie wyłączone.');
+ }
+}
+function trackVideoFrames(controller){
+ if(!video.requestVideoFrameCallback||frameTrackingController===controller)return;
+ frameTrackingController=controller;
+ const next=()=>{if(previewController!==controller||frameTrackingController!==controller)return;framesPresented++;video.requestVideoFrameCallback(next)};
+ video.requestVideoFrameCallback(next);
+}
+rawImage.addEventListener('load',()=>{
+ if(!previewController||img!==rawImage||document.hidden)return;
+ const controller=previewController;framesPresented++;
+ if(!previewReady){previewReady=true;status.textContent='Podgląd · '+current;renderControl()}
+ if(previewStallTimer!==null)clearTimeout(previewStallTimer);
+ previewStallTimer=setTimeout(()=>{
+  previewStallTimer=null;if(previewController!==controller)return;
+  stopPreview();status.textContent='Obraz zatrzymany. Wybierz urządzenie ponownie.';
+  if(controlToken)stop('Obraz zatrzymany. Sterowanie wyłączone.');
+ },3000);
+});
+async function startRaw(id,controller){
+ const response=await fetch('/grabber/stream/'+encodeURIComponent(id),{cache:'no-store',signal:controller.signal});
+ if(!response.ok||!response.body)throw Error('Oryginalny obraz jest niedostępny.');
+ const reader=response.body.getReader(),decoder=new TextDecoder();let buffer=new Uint8Array(0),length=null,headerEnd=0;
+ while(!controller.signal.aborted){
+  const {value,done}=await reader.read();if(done)throw Error('Strumień obrazu został przerwany.');
+  bytesReceived+=value.byteLength;
+  const joined=new Uint8Array(buffer.length+value.length);joined.set(buffer);joined.set(value,buffer.length);buffer=joined;
+  while(true){
+   if(length===null){
+    headerEnd=-1;
+    for(let i=0;i+3<buffer.length;i++)if(buffer[i]===13&&buffer[i+1]===10&&buffer[i+2]===13&&buffer[i+3]===10){headerEnd=i+4;break}
+    if(headerEnd<0){if(buffer.length>4096)throw Error('Nieprawidłowy nagłówek obrazu.');break}
+    const header=decoder.decode(buffer.subarray(0,headerEnd)),match=/content-length:\s*(\d+)/i.exec(header);
+    if(!match||!/^--frame\r\n/i.test(header))throw Error('Nieprawidłowy nagłówek obrazu.');
+    length=Number(match[1]);if(!Number.isSafeInteger(length)||length<1||length>8*1024*1024)throw Error('Nieprawidłowy rozmiar obrazu.');
+   }
+   if(buffer.length<headerEnd+length+2)break;
+   if(buffer[headerEnd+length]!==13||buffer[headerEnd+length+1]!==10)throw Error('Nieprawidłowa klatka obrazu.');
+   const next=URL.createObjectURL(new Blob([buffer.subarray(headerEnd,headerEnd+length)],{type:'image/jpeg'}));
+   const previous=rawFrameUrl;rawFrameUrl=next;rawImage.src=next;if(previous)URL.revokeObjectURL(previous);
+   buffer=buffer.slice(headerEnd+length+2);length=null;
+  }
+ }
+}
+let overlayAt=Date.now(),pingAt=0,pingBusy=false;
+overlayInput.addEventListener('change',()=>{overlay.hidden=!overlayInput.checked});
+setInterval(async()=>{
+ const now=Date.now(),seconds=Math.max((now-overlayAt)/1000,.001),fps=framesPresented/seconds,mbps=bytesReceived*8/seconds/1000000;
+ overlayAt=now;framesPresented=0;bytesReceived=0;
+ if(!overlayInput.checked||!previewController)return;
+ const gap=img===video&&video.buffered.length?Math.max(0,video.buffered.end(video.buffered.length-1)-video.currentTime)*1000:null;
+ const fpsText=img===video&&!video.requestVideoFrameCallback?'n/d':fps.toFixed(1);
+ overlay.textContent='FPS: '+fpsText+'\nTransfer: '+mbps.toFixed(2)+' Mb/s\nRTT HTTP: '+(lastRtt===null?'...':lastRtt.toFixed(0)+' ms')+'\nBufor: '+(gap===null?'n/d':gap.toFixed(0)+' ms');
+ if(!pingBusy&&now-pingAt>=3000){
+  pingBusy=true;pingAt=now;const started=performance.now();
+  try{const response=await fetch('/grabber/api/ping',{cache:'no-store'});if(!response.ok)throw Error();await response.arrayBuffer();lastRtt=performance.now()-started}catch(e){lastRtt=null}finally{pingBusy=false}
+ }
+},1000);
+function updateEncoderControls(){
+ const software=formatInput.value==='h264', qsv=['h264_qsv','hevc_qsv'].includes(formatInput.value);
+ presetInput.disabled=!software;crfInput.disabled=!software;
+ document.querySelector('#preset-label').hidden=!software;
+ document.querySelector('#crf-label').hidden=!software;
+ for(const id of ['qsv-preset-label','qsv-profile-label','qsv-mode-label','qsv-icq-label','qsv-quality-label','qsv-gop-label'])document.querySelector('#'+id).hidden=!qsv;
+ {
+  const choices=formatInput.value==='hevc_qsv'?['main']:['baseline','main','high'];
+  const previous=qsvProfileInput.value;
+  qsvProfileInput.innerHTML=choices.map(value=>'<option value="'+value+'">'+value+'</option>').join('');
+  qsvProfileInput.value=choices.includes(previous)?previous:choices[0];
+ }
+ const icq=qsv&&qsvIcqInput.checked;
+ qsvModeInput.disabled=icq;
+ qsvQualityInput.disabled=!qsv||(!icq&&qsvModeInput.value!=='cqp');
+ bitrateInput.disabled=formatInput.value==='raw'||icq||(qsv&&qsvModeInput.value==='cqp');
+ document.querySelector('#qsv-mode-label').hidden=!qsv||icq;
+ document.querySelector('#qsv-quality-label').hidden=qsvQualityInput.disabled;
+ document.querySelector('#bitrate-label').hidden=bitrateInput.disabled;
+}
+const settingsCookie='davekvm_settings';
+function selectedSettings(){
+ return {format:formatInput.value,preset:presetInput.value,crf:Number(crfInput.value),
+  bitrate:Math.round(Number(bitrateInput.value)*1000),qsvPreset:qsvPresetInput.value||'veryfast',
+  qsvProfile:qsvProfileInput.value||'baseline',qsvMode:qsvModeInput.value||'cbr',
+  qsvIcq:!!qsvIcqInput.checked,qsvQuality:Number(qsvQualityInput.value||18),
+  qsvGop:Number(qsvGopInput.value||30),overlay:!!overlayInput.checked};
+}
+function validSettings(s){
+ return s&&['h264','h264_qsv','hevc_qsv','raw'].includes(s.format)&&
+  ['ultrafast','superfast','veryfast'].includes(s.preset)&&Number.isInteger(s.crf)&&s.crf>=1&&s.crf<=30&&
+  Number.isInteger(s.bitrate)&&s.bitrate>=1000&&s.bitrate<=30000&&
+  ['veryfast','faster','fast','medium','slow','slower','veryslow'].includes(s.qsvPreset)&&
+  ['baseline','main','high'].includes(s.qsvProfile)&&['cbr','vbr','cqp'].includes(s.qsvMode)&&
+  typeof s.qsvIcq==='boolean'&&Number.isInteger(s.qsvQuality)&&s.qsvQuality>=1&&s.qsvQuality<=51&&
+  Number.isInteger(s.qsvGop)&&s.qsvGop>=15&&s.qsvGop<=300&&typeof s.overlay==='boolean'&&
+  !(s.format==='hevc_qsv'&&s.qsvProfile!=='main')&&
+  !(s.format.endsWith('_qsv')&&!s.qsvIcq&&s.qsvMode==='vbr'&&s.bitrate===30000);
+}
+function saveSettings(){
+ const selection=selectedSettings();
+ if(!validSettings(selection))return;
+ try{document.cookie=settingsCookie+'='+encodeURIComponent(JSON.stringify(selection))+'; Max-Age=31536000; Path=/grabber/; SameSite=Lax'}catch(e){}
+}
+function restoreSettings(){
+ try{
+  const entry=(document.cookie||'').split(';').map(item=>item.trim()).find(item=>item.startsWith(settingsCookie+'='));
+  if(!entry)return;
+  const selection=JSON.parse(decodeURIComponent(entry.slice(settingsCookie.length+1)));
+  if(!validSettings(selection))return;
+  formatInput.value=selection.format;presetInput.value=selection.preset;crfInput.value=selection.crf;
+  bitrateInput.value=selection.bitrate/1000;qsvPresetInput.value=selection.qsvPreset;
+  qsvModeInput.value=selection.qsvMode;qsvIcqInput.checked=selection.qsvIcq;
+  qsvQualityInput.value=selection.qsvQuality;qsvGopInput.value=selection.qsvGop;
+  overlayInput.checked=selection.overlay;overlay.hidden=!selection.overlay;
+  updateEncoderControls();qsvProfileInput.value=selection.qsvProfile;
+  applied={format:selection.format,preset:selection.preset,crf:selection.crf,bitrate:selection.bitrate,
+   qsvPreset:selection.qsvPreset,qsvProfile:selection.qsvProfile,
+   qsvMode:selection.qsvIcq?'icq':selection.qsvMode,qsvQuality:selection.qsvQuality,qsvGop:selection.qsvGop};
+ }catch(e){}
+}
+for(const input of [formatInput,qsvModeInput,qsvIcqInput])input.addEventListener('change',()=>{updateEncoderControls();saveSettings()});
+for(const input of [presetInput,crfInput,bitrateInput,qsvPresetInput,qsvProfileInput,qsvQualityInput,qsvGopInput,overlayInput])input.addEventListener('change',saveSettings);
+updateEncoderControls();restoreSettings();
+document.querySelector('#settings').addEventListener('submit',e=>{
+ e.preventDefault();
+ const crf=Number(crfInput.value),bitrate=Math.round(Number(bitrateInput.value)*1000);
+ const qsvPreset=qsvPresetInput.value||'veryfast',qsvProfile=qsvProfileInput.value||'baseline';
+ const qsvMode=qsvIcqInput.checked?'icq':(qsvModeInput.value||'cbr');
+ const qsvQuality=Number(qsvQualityInput.value||18),qsvGop=Number(qsvGopInput.value||30);
+ if(!['h264','h264_qsv','hevc_qsv','raw'].includes(formatInput.value)||!['ultrafast','superfast','veryfast'].includes(presetInput.value)||!Number.isInteger(crf)||crf<1||crf>30||!Number.isInteger(bitrate)||bitrate<1000||bitrate>30000||!['veryfast','faster','fast','medium','slow','slower','veryslow'].includes(qsvPreset)||!['baseline','main','high'].includes(qsvProfile)||!['cbr','vbr','cqp','icq'].includes(qsvMode)||!Number.isInteger(qsvQuality)||qsvQuality<1||qsvQuality>51||!Number.isInteger(qsvGop)||qsvGop<15||qsvGop>300||(formatInput.value.endsWith('_qsv')&&qsvMode==='vbr'&&bitrate===30000)){status.textContent='Nieprawidłowe ustawienia obrazu.';return}
+ if(controlToken)stop('Sterowanie wyłączone podczas zmiany obrazu.');
+ applied={format:formatInput.value,preset:presetInput.value,crf,bitrate,qsvPreset,qsvProfile,qsvMode,qsvQuality,qsvGop};
+ saveSettings();
+ if(current){status.textContent='Łączenie obrazu...';startPreview(current)}
+});
+function choose(d){if(controlToken)stop('Sterowanie wyłączone.');current=d.id;empty.hidden=true;status.textContent=d.name+' · '+d.id;startPreview(d.id);renderControl();refresh()}
+async function refresh(){try{const res=await fetch('/grabber/api/devices',{cache:'no-store'});if(!res.ok)throw Error();const devices=await res.json();controllableDevices=new Set(devices.filter(d=>d.control).map(d=>d.id));list.replaceChildren();if(!devices.length)list.textContent='Nie wykryto urządzeń.';for(const d of devices){const b=document.createElement('button');b.className='device'+(current===d.id?' active':'');b.type='button';b.textContent=d.name;const small=document.createElement('small');small.textContent=(d.id.startsWith('remote-')?'remote · /dev/'+d.id.slice(7):'local · /dev/'+d.id);b.append(small);b.onclick=()=>choose(d);list.append(b)}if(current&&!devices.some(d=>d.id===current)){if(controlToken)stop('Urządzenie zostało odłączone.');current=null;stopPreview();video.hidden=true;rawImage.hidden=true;empty.hidden=false;empty.textContent='Urządzenie zostało odłączone.';status.textContent='Wybierz grabber z listy';renderControl()}}catch(e){list.textContent='Nie udało się pobrać listy urządzeń.'}}
+document.querySelector('#full').onclick=()=>document.querySelector('#screen').requestFullscreen?.();document.querySelector('#exit-full').onclick=()=>document.exitFullscreen?.();
+async function refreshEncoders(){
+ try{const response=await fetch('/grabber/api/encoders',{cache:'no-store'});if(!response.ok)return;const data=await response.json();
+  for(const value of ['h264_qsv','hevc_qsv'])document.querySelector('#format option[value="'+value+'"]').disabled=!data.qsv;
+ }catch(e){}
+}
+renderControl();refresh();refreshEncoders();setInterval(refresh,5000);
+</script></body></html>
