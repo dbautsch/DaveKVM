@@ -1,0 +1,127 @@
+#!/usr/bin/python3
+# Copyright (c) 2026 Dawid Bautsch
+# SPDX-License-Identifier: MIT
+import fcntl, glob, json, os, re, select, struct, subprocess, sys, time
+from pathlib import Path
+
+def devices():
+    result = []
+    for path in sorted(glob.glob('/dev/video[0-9]*')):
+        name = os.path.basename(path)
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                cap = bytearray(104)
+                fcntl.ioctl(fd, 0x80685600, cap, True)
+            finally:
+                os.close(fd)
+            capabilities, device_caps = struct.unpack_from('II', cap, 84)
+            effective = device_caps if capabilities & 0x80000000 else capabilities
+            if effective & 1:
+                label = (Path('/sys/class/video4linux') / name / 'name').read_text().strip()
+                result.append({'id': name, 'name': label})
+        except (OSError, ValueError):
+            continue
+    return result
+
+def keyboard():
+    # The forced SSH command exposes exactly one CH340 port and keyboard reports.
+    import select, serial, time
+    path = os.environ.get('DAVEKVM_BRIDGE_SERIAL', '')
+    if not (path.startswith('/dev/serial/by-id/') or path.startswith('/dev/serial/by-path/')):
+        raise RuntimeError('Configure DAVEKVM_BRIDGE_SERIAL with a stable serial path')
+    tty = Path(os.path.realpath(path)).name
+    usb = (Path('/sys/class/tty') / tty / 'device').resolve().parent.parent
+    if not re.fullmatch(r'ttyUSB[0-9]+', tty) or (usb / 'idVendor').read_text().strip() != '1a86' or (usb / 'idProduct').read_text().strip() != '7523':
+        raise RuntimeError('Nie znaleziono CH340 w skonfigurowanym porcie')
+    port = serial.Serial(path, 9600, timeout=0.6, write_timeout=0.6, exclusive=True)
+    port.reset_input_buffer()
+    def send_packet(command, payload):
+        frame = bytes([0x57, 0xab, 0, command, len(payload)] + payload)
+        port.write(frame + bytes([sum(frame) & 255])); port.flush()
+        reply = port.read(7)
+        if len(reply) != 7 or reply[:6] != bytes([0x57, 0xab, 0, command | 0x80, 1, 0]) or sum(reply[:-1]) & 255 != reply[-1]:
+            raise RuntimeError('Brak potwierdzenia CH9329')
+    def send(modifiers, keys):
+        send_packet(2, [modifiers, 0] + keys + [0] * (6-len(keys)))
+    def release_mouse():
+        send_packet(5, [1, 0, 0, 0, 0])
+    try:
+        send(0, [])
+        release_mouse()
+        print(json.dumps({'ok': True}), flush=True)
+        pending = b''
+        deadline = time.monotonic() + 8
+        fd = sys.stdin.fileno()
+        while True:
+            if b'\n' not in pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([fd], [], [], remaining)[0]: break
+                chunk = os.read(fd, 2049)
+                if not chunk: break
+                pending += chunk
+                if len(pending) > 2048: raise ValueError('report too long')
+                if b'\n' not in pending: continue
+            line, pending = pending.split(b'\n', 1)
+            data = json.loads(line)
+            if not isinstance(data, dict): raise ValueError('invalid report')
+            if set(data) == {'modifiers', 'keys'}:
+                mods, keys = data['modifiers'], data['keys']
+                if type(mods) is not int or not 0 <= mods <= 255 or not isinstance(keys, list) or len(keys) > 6 or any(type(k) is not int or not 4 <= k <= 221 for k in keys) or len(set(keys)) != len(keys):
+                    raise ValueError('invalid report')
+                send(mods, keys)
+            elif set(data) == {'mouse'}:
+                mouse = data['mouse']
+                if not isinstance(mouse, list) or len(mouse) != 4 or any(type(v) is not int for v in mouse): raise ValueError('invalid mouse')
+                x, y, buttons, wheel = mouse
+                if not (0 <= x <= 4095 and 0 <= y <= 4095 and 0 <= buttons <= 7 and -127 <= wheel <= 127): raise ValueError('invalid mouse')
+                send_packet(4, [2, buttons, x & 255, x >> 8, y & 255, y >> 8, wheel & 255])
+            elif set(data) == {'mouse_relative'}:
+                mouse = data['mouse_relative']
+                if not isinstance(mouse, list) or len(mouse) != 4 or any(type(v) is not int for v in mouse): raise ValueError('invalid mouse')
+                dx, dy, buttons, wheel = mouse
+                if not (-127 <= dx <= 127 and -127 <= dy <= 127 and 0 <= buttons <= 7 and -127 <= wheel <= 127): raise ValueError('invalid mouse')
+                send_packet(5, [1, buttons, dx & 255, dy & 255, wheel & 255])
+            else: raise ValueError('invalid report')
+            print(json.dumps({'ok': True}), flush=True)
+            deadline = time.monotonic() + 8
+    finally:
+        try:
+            try: send(0, [])
+            finally: release_mouse()
+        finally: port.close()
+
+command = os.environ.get('SSH_ORIGINAL_COMMAND', '')
+if command == 'keyboard ' + os.environ.get('DAVEKVM_BRIDGE_VIDEO_ID', 'video0'):
+    keyboard()
+    sys.exit(0)
+if command == 'list':
+    print(json.dumps(devices()))
+    sys.exit(0)
+match = re.fullmatch(r'stream (video[0-9]+)', command)
+if match and match.group(1) in {d['id'] for d in devices()}:
+    size = os.environ.get('DAVEKVM_BRIDGE_SIZE', '1920x1080')
+    fps = os.environ.get('DAVEKVM_BRIDGE_FPS', '30')
+    if not re.fullmatch(r'[1-9][0-9]{2,3}x[1-9][0-9]{2,3}', size):
+        raise ValueError('invalid capture dimensions')
+    if not fps.isascii() or not fps.isdecimal() or not 1 <= int(fps) <= 120:
+        raise ValueError('invalid capture frame rate')
+    process = subprocess.Popen(['/usr/bin/ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'v4l2', '-input_format', 'mjpeg', '-video_size', size, '-framerate', fps, '-i', '/dev/' + match.group(1), '-an', '-c:v', 'copy', '-f', 'mpjpeg', '-boundary_tag', 'frame', 'pipe:1'])
+    last_heartbeat = time.monotonic()
+    try:
+        while process.poll() is None:
+            if time.monotonic() - last_heartbeat >= 10:
+                break
+            if select.select([sys.stdin.fileno()], [], [], 1)[0]:
+                if not os.read(sys.stdin.fileno(), 256):
+                    break
+                last_heartbeat = time.monotonic()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try: process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+    sys.exit(process.returncode or 0)
+sys.exit(1)

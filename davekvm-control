@@ -1,0 +1,175 @@
+#!/usr/bin/python3
+# Copyright (c) 2026 Dawid Bautsch
+# SPDX-License-Identifier: MIT
+"""JSON Lines keyboard control for an authenticated SSH session on DaveKVM."""
+import base64, json, os, re, signal, sys, threading, urllib.error, urllib.parse, urllib.request
+from pathlib import Path
+
+BASE_URL = os.environ.get('DAVEKVM_BASE_URL', 'http://127.0.0.1:8080').rstrip('/')
+BASE = BASE_URL + '/grabber/api/keyboard/'
+MODS = {'ControlLeft':1, 'ShiftLeft':2, 'AltLeft':4, 'MetaLeft':8, 'ControlRight':16, 'ShiftRight':32, 'AltRight':64, 'MetaRight':128}
+KEYS = {'Enter':40,'Escape':41,'Backspace':42,'Tab':43,'Space':44,'Minus':45,'Equal':46,'BracketLeft':47,'BracketRight':48,'Backslash':49,'IntlHash':50,'Semicolon':51,'Quote':52,'Backquote':53,'Comma':54,'Period':55,'Slash':56,'CapsLock':57,'PrintScreen':70,'ScrollLock':71,'Pause':72,'Insert':73,'Home':74,'PageUp':75,'Delete':76,'End':77,'PageDown':78,'ArrowRight':79,'ArrowLeft':80,'ArrowDown':81,'ArrowUp':82,'NumLock':83,'NumpadDivide':84,'NumpadMultiply':85,'NumpadSubtract':86,'NumpadAdd':87,'NumpadEnter':88,'Numpad1':89,'Numpad2':90,'Numpad3':91,'Numpad4':92,'Numpad5':93,'Numpad6':94,'Numpad7':95,'Numpad8':96,'Numpad9':97,'Numpad0':98,'NumpadDecimal':99,'IntlBackslash':100,'ContextMenu':101,'NumpadEqual':103}
+KEYS.update({'Key'+chr(65+i):4+i for i in range(26)})
+KEYS.update({'Digit'+str(i):29+i for i in range(1,10)})
+KEYS['Digit0']=39
+KEYS.update({'F'+str(i):57+i for i in range(1,13)})
+KEYS.update({'F'+str(i):91+i for i in range(13,25)})
+SYMBOLS = {' ':'Space','-':'Minus','=':'Equal','[':'BracketLeft',']':'BracketRight','\\':'Backslash',';':'Semicolon',"'":'Quote','`':'Backquote',',':'Comma','.':'Period','/':'Slash','\n':'Enter','\t':'Tab'}
+SHIFTED = {'!':'Digit1','@':'Digit2','#':'Digit3','$':'Digit4','%':'Digit5','^':'Digit6','&':'Digit7','*':'Digit8','(':'Digit9',')':'Digit0','_':'Minus','+':'Equal','{':'BracketLeft','}':'BracketRight','|':'Backslash',':':'Semicolon','"':'Quote','~':'Backquote','<':'Comma','>':'Period','?':'Slash'}
+
+class Client:
+    def __init__(self, device):
+        self.device = device
+        password = Path(os.environ.get('DAVEKVM_PASSWORD_FILE', str(Path.home() / '.config/davekvm/password'))).read_text().strip()
+        self.auth = 'Basic ' + base64.b64encode((os.environ.get('DAVEKVM_USERNAME', 'davekvm')+':'+password).encode()).decode()
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.lock = threading.Lock()
+        self.token = None
+        self.modifiers = 0
+        self.keys = []
+        self.stop = threading.Event()
+        self.failure = None
+
+    def call(self, action, data):
+        req = urllib.request.Request(BASE+action, json.dumps(data).encode(), {'Authorization':self.auth, 'Origin':os.environ.get('DAVEKVM_ORIGIN', BASE_URL), 'Host':urllib.parse.urlsplit(os.environ.get('DAVEKVM_ORIGIN', BASE_URL)).netloc, 'Content-Type':'application/json'})
+        try:
+            with self.opener.open(req, timeout=5) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            try: message = json.load(exc).get('error')
+            except (ValueError, UnicodeError): message = None
+            raise RuntimeError(message or 'Błąd HTTP '+str(exc.code)) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise RuntimeError('Nie można połączyć się z panelem DaveKVM') from exc
+
+    def acquire(self):
+        self.token = self.call('acquire', {'device':self.device})['token']
+        threading.Thread(target=self.heartbeat, daemon=True).start()
+
+    def state(self, modifiers, keys):
+        with self.lock:
+            if self.failure: raise RuntimeError(self.failure)
+            self.call('state', {'token':self.token, 'modifiers':modifiers, 'keys':keys})
+            self.modifiers, self.keys = modifiers, list(keys)
+
+    def mouse(self, x, y, buttons, wheel, relative=False):
+        with self.lock:
+            if self.failure: raise RuntimeError(self.failure)
+            self.call('mouse-relative' if relative else 'mouse', {'token': self.token, 'x': x, 'y': y, 'buttons': buttons, 'wheel': wheel})
+
+    def heartbeat(self):
+        while not self.stop.wait(2):
+            with self.lock:
+                try: self.call('state', {'token':self.token, 'modifiers':self.modifiers, 'keys':self.keys})
+                except Exception as exc:
+                    self.failure = str(exc)
+                    return
+
+    def close(self):
+        self.stop.set()
+        if self.token:
+            with self.lock:
+                try: self.call('release', {'token':self.token})
+                except Exception: pass
+                self.token = None
+
+def parse_mods(value):
+    if not isinstance(value, list) or any(not isinstance(x,str) or x not in MODS for x in value):
+        raise ValueError('Nieznane modyfikatory; użyj np. ControlLeft, ShiftLeft, AltLeft')
+    bits=0
+    for m in value: bits |= MODS[m]
+    return bits
+
+def parse_keys(value):
+    if not isinstance(value, list) or len(value)>6 or any(not isinstance(x,str) or x not in KEYS for x in value):
+        raise ValueError('Nieznane klawisze lub więcej niż 6 klawiszy')
+    result=[KEYS[k] for k in value]
+    if len(set(result)) != len(result): raise ValueError('Powtórzony klawisz')
+    return result
+
+def char_key(c):
+    if 'a' <= c <= 'z': return 'Key'+c.upper(), 0
+    if 'A' <= c <= 'Z': return 'Key'+c, 2
+    if '0' <= c <= '9': return 'Digit'+c, 0
+    if c in SYMBOLS: return SYMBOLS[c], 0
+    if c in SHIFTED: return SHIFTED[c], 2
+    raise ValueError('Tekst obsługuje znaki ASCII; układ klawiatury zależy od komputerem docelowym')
+
+def execute(client, data):
+    if not isinstance(data,dict): raise ValueError('Oczekiwano obiektu JSON')
+    action=data.get('action')
+    if action=='type':
+        text=data.get('text')
+        if not isinstance(text,str) or len(text)>1000: raise ValueError('Tekst musi mieć najwyżej 1000 znaków')
+        # Validate before sending anything, so invalid text cannot be partially typed.
+        reports=[char_key(c) for c in text]
+        for name,mod in reports:
+            client.state(mod,[KEYS[name]])
+            client.state(0,[])
+        return {'ok':True,'typed':len(text)}
+    if action=='key':
+        key=data.get('key'); mods=parse_mods(data.get('modifiers',[])); keys=parse_keys([key])
+        client.state(mods,keys)
+        client.state(0,[])
+        return {'ok':True}
+    if action=='state':
+        mods=parse_mods(data.get('modifiers',[]));keys=parse_keys(data.get('keys',[]))
+        client.state(mods,keys)
+        return {'ok':True}
+    if action in ('mouse', 'mouse_relative'):
+        x,y,buttons,wheel = (data.get(k, default) for k,default in (('x',None),('y',None),('buttons',0),('wheel',0)))
+        relative = action == 'mouse_relative'
+        if any(type(v) is not int for v in (x,y,buttons,wheel)) or not (0<=buttons<=7 and -127<=wheel<=127) or (relative and not (-127<=x<=127 and -127<=y<=127)) or (not relative and not (0<=x<=4095 and 0<=y<=4095)):
+            raise ValueError('Mysz: x/y 0–4095 albo -127–127 dla ruchu względnego; buttons 0–7; wheel -127–127')
+        client.mouse(x,y,buttons,wheel,relative=relative)
+        return {'ok':True}
+    if action=='release':
+        client.state(0,[])
+        return {'ok':True}
+    raise ValueError('Nieznana akcja: użyj type, key, state lub release')
+
+def emit(value):
+    print(json.dumps(value, ensure_ascii=False),flush=True)
+
+def main():
+    if sys.argv[1:] in (['--help'], ['-h']):
+        print('''davekvm-control - keyboard and mouse over JSON Lines
+Use --device remote-video0 for a remote target; the default is video0.
+The ready event confirms acquisition. Closing stdin releases control.
+Examples (one JSON object per line):
+  {"action":"type","text":"hello"}
+  {"action":"key","key":"Enter"}
+  {"action":"key","key":"KeyC","modifiers":["ControlLeft"]}
+  {"action":"state","keys":["KeyA"],"modifiers":["ShiftLeft"]}
+  {"action":"release"}
+  {"action":"mouse","x":2048,"y":2048,"buttons":0,"wheel":0}
+  {"action":"mouse_relative","x":10,"y":-10,"buttons":0,"wheel":0}
+Absolute mouse coordinates are 0-4095; button bits: left=1, right=2, middle=4.
+Keys use KeyboardEvent.code names (e.g. KeyA, Digit1, F2, ArrowLeft).
+Typing uses US-layout ASCII; results depend on the target keyboard layout.
+Capture a frame: davekvm-grabber snapshot video0 > frame.jpg''')
+        return 0
+    args=sys.argv[1:]
+    if not args: device='video0'
+    elif len(args)==2 and args[0]=='--device' and re.fullmatch(r'(?:remote-)?video[0-9]+', args[1]): device=args[1]
+    else:
+        print('Użycie: davekvm-control [--device video0|remote-video0] [--help]',file=sys.stderr);return 2
+    client=Client(device)
+    def stop(signum, frame): raise SystemExit(128+signum)
+    signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGHUP,stop)
+    try:
+        client.acquire();emit({'event':'ready','device':device,'target':device})
+        for line in sys.stdin:
+            try:
+                if len(line)>8192: raise ValueError('Polecenie jest zbyt długie')
+                emit(execute(client,json.loads(line)))
+            except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
+                emit({'ok':False,'error':str(exc)})
+                if client.failure: return 1
+        return 0
+    except (OSError,RuntimeError,KeyError) as exc:
+        print('davekvm-control: '+str(exc),file=sys.stderr);return 1
+    finally: client.close()
+
+if __name__=='__main__':
+    raise SystemExit(main())
