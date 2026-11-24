@@ -40,7 +40,8 @@ def render_demo(html: str, kind: str) -> str:
     demo = ("<script>setTimeout(()=>{current='video0';controllableDevices.add('video0');"
             "previewReady=true;video.hidden=true;rawImage.hidden=false;rawImage.src="
             + json.dumps(uri) + ";empty.hidden=true;status.textContent='Demo HDMI capture - video0';"
-            "renderControl();},300);</script>")
+            "renderControl();const language=document.querySelector('#language');"
+            "language.value='en';language.dispatchEvent(new Event('change'));},300);</script>")
     if html.count('<script>') != 1 or html.count('</body>') != 1:
         raise ValueError('unexpected panel structure')
     return html.replace('<script>', mock + '<script>', 1).replace('</body>', demo + '</body>', 1)

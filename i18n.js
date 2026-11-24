@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Source for the inline translation block in index.html.
 const translations = {
+  'Language / Język': ['Language', 'Sprache', 'Jazyk'],
   'LOKALNY PODGLĄD': ['LOCAL PREVIEW', 'LOKALE VORSCHAU', 'MÍSTNÍ NÁHLED'],
   'Podgląd na żywo': ['Live preview', 'Live-Vorschau', 'Živý náhled'],
   'Wybierz urządzenie, aby zobaczyć obraz z wejścia HDMI.': ['Select a device to view its HDMI input.', 'Wähle ein Gerät für das HDMI-Bild.', 'Vyberte zařízení pro zobrazení vstupu HDMI.'],
