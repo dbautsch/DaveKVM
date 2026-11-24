@@ -5,11 +5,11 @@ device and controlling a connected computer through a CH9329 USB HID adapter.
 It also provides command-line tools for screenshots, MJPEG streams and JSON
 keyboard/mouse automation over an authenticated SSH session.
 
-![DaveKVM panel showing a synthetic desktop](assets/panel.png)
+![DaveKVM panel showing a synthetic desktop](assets/panel-en.png)
 
 The screenshots use generated examples. They do not show a real computer.
 
-![DaveKVM panel showing a synthetic Linux console](assets/console.png)
+![DaveKVM panel showing a synthetic Linux console](assets/console-en.png)
 
 ## Features
 
