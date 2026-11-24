@@ -5,7 +5,11 @@ import base64
 import http.client
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import threading
 import unittest
 from unittest.mock import Mock, patch
@@ -62,6 +66,33 @@ class HttpTests(unittest.TestCase):
         headers['Content-Type'] = 'application/json'
         self.assertEqual(self.request('POST', '/grabber/api/keyboard/acquire', headers, b'{}')[0], 409)
 
+    def test_error_code_is_stable_and_message_uses_cookie_language(self):
+        expected = {
+            'en': 'No keyboard is assigned to this device',
+            'pl': 'Do tego grabbera nie przypisano klawiatury',
+            'de': 'Diesem Gerät ist keine Tastatur zugeordnet',
+            'cs': 'K tomuto zařízení není přiřazena klávesnice',
+        }
+        for language, translation in expected.items():
+            headers = dict(self.auth(), Origin=server.ORIGIN,
+                           Cookie='davekvm_language=' + language,
+                           **{'Content-Type': 'application/json', 'Accept-Language': 'en'})
+            status, raw = self.request('POST', '/grabber/api/keyboard/acquire', headers, b'{}')
+            self.assertEqual(status, 409)
+            self.assertEqual(json.loads(raw), {'error_code': 'NO_KEYBOARD_MAPPING', 'error': translation})
+
+    def test_language_fallback_and_invalid_request_are_safe(self):
+        headers = dict(self.auth(), Origin=server.ORIGIN,
+                       Cookie='davekvm_language=unsupported',
+                       **{'Content-Type': 'application/json'})
+        status, raw = self.request('POST', '/grabber/api/keyboard/acquire', headers, b'not-json')
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(raw), {'error_code': 'INVALID_REQUEST', 'error': 'Invalid request'})
+        headers.pop('Cookie')
+        headers['Accept-Language'] = 'de-DE,de;q=0.9'
+        _, raw = self.request('POST', '/grabber/api/keyboard/acquire', headers, b'{}')
+        self.assertEqual(json.loads(raw)['error'], 'Diesem Gerät ist keine Tastatur zugeordnet')
+
     def test_capture_and_control_round_trip_without_hardware(self):
         capture = Mock()
         capture.get.return_value = (1, b'--frame\r\nContent-type: image/jpeg\r\n\r\n\xff\xd8demo\xff\xd9\r\n')
@@ -88,6 +119,29 @@ class HttpTests(unittest.TestCase):
         capture.release.assert_called_once()
         keyboard.update.assert_called_once_with(token, 0, [4])
         keyboard.release.assert_called_once_with(token)
+
+    def test_cli_returns_localized_error_and_code_after_acquiring_lease(self):
+        keyboard = Mock()
+        keyboard.acquire.return_value = 'a' * 43
+        with tempfile.TemporaryDirectory() as directory:
+            password = Path(directory) / 'password'
+            password.write_text(server.PASSWORD, encoding='utf-8')
+            env = dict(os.environ, DAVEKVM_PASSWORD_FILE=str(password),
+                       DAVEKVM_BASE_URL=server.ORIGIN, DAVEKVM_USERNAME=server.USERNAME,
+                       DAVEKVM_LANG='de')
+            with patch.object(server, 'keyboards', {'video0': keyboard}), \
+                 patch.object(server, 'keyboard_for_token', return_value=keyboard):
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve().parents[1] / 'davekvm-control')],
+                    input=json.dumps({'action': 'type', 'text': '\u2603'}) + '\n',
+                    capture_output=True, text=True, env=env, timeout=10,
+                )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ready, error = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(ready['event'], 'ready')
+        self.assertEqual(error['error_code'], 'UNSUPPORTED_TEXT')
+        self.assertEqual(error['error'], 'Text unterstützt nur ASCII mit US-Tastaturlayout')
+        keyboard.release.assert_called_once()
 
 
 if __name__ == '__main__':

@@ -24,6 +24,23 @@ test('dynamic messages retain device identifiers', () => {
     assert.equal(context.translateText('Podgląd na żywo', 'invalid'), 'Podgląd na żywo');
 });
 
+test('backend error codes translate in all languages and unknown codes are safe', () => {
+    const text = context.backendError('KEYBOARD_BUSY', 'ignored');
+    assert.equal(text, 'Klawiatura jest zajęta przez innego użytkownika');
+    assert.equal(context.translateText(text, 'en'), 'Keyboard is in use by another user');
+    assert.equal(context.translateText(text, 'de'), 'Tastatur wird von einem anderen Benutzer verwendet');
+    assert.equal(context.translateText(text, 'cs'), 'Klávesnici používá jiný uživatel');
+    assert.equal(context.backendError('toString', 'ignored'), 'Nieoczekiwany błąd');
+    assert.equal(context.backendError(null, 'legacy'), 'legacy');
+    const codes = vm.runInContext('Object.keys(backendErrorText)', context);
+    for (const code of codes) {
+        const polish = context.backendError(code, '');
+        for (const language of ['en', 'de', 'cs']) {
+            assert.notEqual(context.translateText(polish, language), polish, `${code} missing ${language}`);
+        }
+    }
+});
+
 test('HTML contains the current translator and all selectable languages', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
     assert.ok(html.replace(/\r\n/g, '\n').includes(source.replace(/\r\n/g, '\n').trim()));

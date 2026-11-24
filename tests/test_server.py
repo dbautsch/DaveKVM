@@ -113,7 +113,7 @@ class WebEncoderTest(unittest.TestCase):
             server.Handler.web_h264(handler, 'remote-video0')
         capture.acquire.assert_called_once()
         capture.release.assert_called_once()
-        handler.send_error.assert_called_once_with(503)
+        handler.reply_error.assert_called_once_with(503, 'ENCODER_UNAVAILABLE')
         self.assertTrue(slots.acquire(blocking=False))
         slots.release()
 
@@ -125,7 +125,7 @@ class WebEncoderTest(unittest.TestCase):
              patch.object(server, 'get_capture') as get_capture:
             server.Handler.web_h264(handler, 'remote-video0')
         get_capture.assert_not_called()
-        handler.send_error.assert_called_once_with(503, 'H264 encoder busy')
+        handler.reply_error.assert_called_once_with(503, 'ENCODER_BUSY')
         slots.release()
 
     def test_slow_client_timeout_stops_encoder_and_releases_capture(self):
